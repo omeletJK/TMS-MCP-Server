@@ -1,0 +1,42 @@
+{
+  "id": "3d0fd11b-e8e7-4b38-b6f1-d121e9e88b88",
+  "name": "새 배송 최적화",
+  "created_at": "2025-06-07T16:58:20.442Z",
+  "updated_at": "2025-06-07T17:01:11.865Z",
+  "current_step": 3,
+  "steps_completed": [
+    "start_project",
+    "prepare_data",
+    "configure_problem"
+  ],
+  "data_status": {
+    "drivers_loaded": true,
+    "orders_loaded": true,
+    "depots_loaded": true,
+    "validation_passed": true
+  },
+  "files_processed": [
+    "drivers.csv",
+    "orders.csv",
+    "depots.csv"
+  ],
+  "config": {
+    "objective": "cost",
+    "constraints": {
+      "vehicle_capacity": true,
+      "time_windows": true,
+      "working_hours": true,
+      "max_vehicles": 10
+    },
+    "advanced_options": {
+      "multi_depot": false,
+      "priority_delivery": true,
+      "optimization_intensity": "balanced"
+    },
+    "business_rules": {
+      "max_working_hours": 8,
+      "fuel_cost_per_km": 150,
+      "break_duration": 60
+    }
+  }
+}

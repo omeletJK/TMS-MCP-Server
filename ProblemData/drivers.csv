@@ -1,0 +1,4 @@
+driver_id,name,start_location_lat,start_location_lng,end_location_lat,end_location_lng,capacity,cost_per_km
+D001,김민수,37.5665,126.978,37.5665,126.978,1000,500
+D002,이영희,37.5505,126.9882,37.5505,126.9882,1500,550
+D003,박철수,37.5642,126.9734,37.5642,126.9734,800,480 
