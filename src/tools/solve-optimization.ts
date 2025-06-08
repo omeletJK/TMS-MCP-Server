@@ -120,10 +120,10 @@ export async function handleSolveOptimization(args: any): Promise<{ content: any
     
     const optimizationOptions = {
       objective: 'minsum' as const, // OMELET API는 minsum/minmax만 지원
-      timeLimit: custom_options.time_limit || getTimeLimit(session.config?.advanced_options?.optimization_intensity || 'balanced'),
-      enableCapacityConstraint: session.config?.constraints?.vehicle_capacity ?? true,
-      enableTimeWindowConstraint: session.config?.constraints?.time_windows ?? true,
-      allowUnassignedVisits: false, // 기본적으로 모든 주문 할당 시도
+      timeLimit: custom_options.time_limit, // API 클라이언트에서 가이드 기준으로 자동 설정
+      enableCapacityConstraint: session.config?.constraints?.vehicle_capacity ?? false,
+      enableTimeWindowConstraint: session.config?.constraints?.time_windows ?? false,
+      allowUnassignedVisits: custom_options.allow_unassigned_visits, // API 클라이언트에서 자동 설정
       distanceType: 'euclidean' as const,
       deliveryStartTime: new Date().toISOString()
     };
@@ -197,11 +197,22 @@ export async function handleSolveOptimization(args: any): Promise<{ content: any
       // 11. 백업 저장
       await saveOptimizationBackup(session_id, optimizationResult, omeletRequest);
 
-      // 12. 다음 단계 안내
-      response += `\n🎯 **다음 단계:**\n`;
-      response += `최적화가 완료되었습니다! \`analyze_results\` 도구를 실행하여 결과를 상세히 분석해보세요.\n\n`;
-      response += `💡 **명령어 예시:**\n`;
-      response += `"결과를 분석하고 지도로 보여줘" 또는 "analyze_results 실행해줘"`;
+      // 12. 다음 작업 선택 옵션 제공
+      response += `\n✅ **4단계 완료: 최적화가 성공적으로 완료되었습니다!**\n\n`;
+      response += `🎯 **다음에 무엇을 하시겠습니까?**\n\n`;
+      response += `**Option 1:** 📊 결과 상세 분석\n`;
+      response += `- "결과를 분석해줘" 또는 "analyze_results 실행"\n`;
+      response += `- 경로별 상세 정보와 지도 시각화를 제공합니다\n\n`;
+      response += `**Option 2:** 🎨 경로 지도 생성\n`;
+      response += `- "지도로 보여줘" 또는 "시각화해줘"\n`;
+      response += `- 최적화된 경로를 지도 위에 표시합니다\n\n`;
+      response += `**Option 3:** 🔧 솔루션 개선\n`;
+      response += `- "솔루션을 개선해줘" 또는 "refine_solution 실행"\n`;
+      response += `- 더 나은 최적화를 위한 조정을 진행합니다\n\n`;
+      response += `**Option 4:** 📋 결과 내보내기\n`;
+      response += `- "결과를 내보내줘" 또는 "export_results 실행"\n`;
+      response += `- Excel, CSV 등의 형식으로 결과를 저장합니다\n\n`;
+      response += `💬 **어떤 작업을 원하시는지 말씀해주세요!**`;
 
       return {
         content: [{
@@ -416,6 +427,7 @@ function generateResultSummary(result: ProcessedOmeletResponse, drivers: any[], 
 // 최적화 결과 백업 저장
 async function saveOptimizationBackup(sessionId: string, result: ProcessedOmeletResponse, request: any): Promise<void> {
   try {
+    const fs = await import('fs-extra');
     const backupData = {
       session_id: sessionId,
       timestamp: new Date().toISOString(),
@@ -431,9 +443,9 @@ async function saveOptimizationBackup(sessionId: string, result: ProcessedOmelet
     };
 
     const backupPath = `./output/optimization_backup_${sessionId}_${Date.now()}.json`;
-    await require('fs-extra').writeJSON(backupPath, backupData, { spaces: 2 });
+    await fs.writeJSON(backupPath, backupData, { spaces: 2 });
     
-            console.error(`✅ 최적화 결과 백업 저장: ${backupPath}`);
+    console.log(`✅ 최적화 결과 백업 저장: ${backupPath}`);
   } catch (error) {
     console.error('❌ 백업 저장 실패:', error);
     // 백업 실패는 치명적이지 않으므로 무시

@@ -162,7 +162,8 @@ export class SessionManager {
   async completeStep(sessionId: string, step: WorkflowStep): Promise<void> {
     const session = await this.loadSession(sessionId);
     if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
+      console.warn(`Session ${sessionId} not found for completeStep`);
+      return; // 조용히 실패
     }
 
     if (!session.steps_completed.includes(step)) {

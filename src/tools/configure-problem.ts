@@ -32,18 +32,15 @@ export const configureProblemTool: Tool = {
         properties: {
           vehicle_capacity: {
             type: 'boolean',
-            description: '차량 용량 제약 적용 여부',
-            default: true
+            description: '차량 용량 제약 적용 여부 (기본값: false, 필요시에만 명시적으로 활성화)'
           },
           time_windows: {
             type: 'boolean',
-            description: '시간창 제약 적용 여부',
-            default: true
+            description: '시간창 제약 적용 여부 (기본값: false, 데이터에 시간창이 있을 때만 활성화 권장)'
           },
           working_hours: {
             type: 'boolean',
-            description: '근무시간 제약 적용 여부',
-            default: true
+            description: '근무시간 제약 적용 여부 (기본값: false, 데이터에 근무시간이 있을 때만 활성화 권장)'
           },
           max_vehicles: {
             type: 'number',
@@ -146,33 +143,70 @@ export async function handleConfigureProblem(args: any): Promise<{ content: any[
       return await handleInteractiveConfiguration(session_id);
     }
 
-    // 4. 설정값 처리 및 검증
+    // 4. 제약조건 사전 검증 (데이터 기반)
+    const timeConstraintData = await detectTimeConstraints(session);
+    let validatedConstraints = constraints;
+    
+    // 시간 제약조건이 true로 설정되었지만 데이터에 시간 정보가 없는 경우 경고 및 자동 수정
+    if (constraints?.time_windows === true && !timeConstraintData.hasTimeWindows) {
+      response += `⚠️ **시간창 제약 경고**: 데이터에 시간창 정보가 없어 시간창 제약을 비활성화했습니다.\n\n`;
+      validatedConstraints = { ...constraints, time_windows: false };
+    }
+    
+    if (constraints?.working_hours === true && !timeConstraintData.hasWorkingHours) {
+      response += `⚠️ **근무시간 제약 경고**: 데이터에 근무시간 정보가 없어 근무시간 제약을 비활성화했습니다.\n\n`;
+      validatedConstraints = { ...validatedConstraints, working_hours: false };
+    }
+    
+    // 제약조건이 명시적으로 전달된 경우 사용자에게 알림
+    if (constraints && Object.keys(constraints).length > 0) {
+      response += `📋 **전달받은 제약조건:**\n`;
+      response += `- 차량 용량 제약: ${constraints.vehicle_capacity === true ? '요청됨' : '비활성화'}\n`;
+      response += `- 시간창 제약: ${constraints.time_windows === true ? '요청됨' : '비활성화'}\n`;
+      response += `- 근무시간 제약: ${constraints.working_hours === true ? '요청됨' : '비활성화'}\n\n`;
+      
+      if (constraints.time_windows === true || constraints.working_hours === true) {
+        response += `💡 **데이터 검증 결과:**\n`;
+        response += `- 시간창 정보: ${timeConstraintData.hasTimeWindows ? `있음 (${timeConstraintData.ordersWithTime}건)` : '없음'}\n`;
+        response += `- 근무시간 정보: ${timeConstraintData.hasWorkingHours ? `있음 (${timeConstraintData.driversWithTime}명)` : '없음'}\n\n`;
+      }
+    }
+
+    // 5. 설정값 처리 및 검증 (검증된 제약조건 사용)
     const config = await buildOptimizationConfig(
       objective, 
-      constraints, 
+      validatedConstraints, 
       advanced_options, 
       business_rules,
       session
     );
 
-    // 5. 설정 요약 생성
+    // 6. 설정 요약 생성
     const configSummary = generateConfigSummary(config);
     response += configSummary;
 
-    // 6. 비즈니스 영향 분석
+    // 7. 비즈니스 영향 분석
     const impactAnalysis = analyzeBusinessImpact(config, session);
     response += impactAnalysis;
 
-    // 7. 세션에 설정 저장
+    // 8. 세션에 설정 저장
     session.config = config;
     await sessionManager.saveSession(session);
     await sessionManager.completeStep(session_id, 'configure_problem');
 
-    // 8. 다음 단계 안내
-    response += `\n🎯 **다음 단계:**\n`;
-    response += `설정이 완료되었습니다! \`solve_optimization\` 도구를 실행하여 최적화를 시작하세요.\n\n`;
-    response += `💡 **명령어 예시:**\n`;
-    response += `"최적화를 실행해줘" 또는 "배송 경로를 최적화해줘"`;
+    // 9. 다음 작업 선택 옵션 제공
+    response += `\n✅ **3단계 완료: 문제 설정이 완료되었습니다!**\n\n`;
+    response += `🎯 **다음에 무엇을 하시겠습니까?**\n\n`;
+    response += `**Option 1:** 🚀 최적화 실행\n`;
+    response += `- "최적화를 시작해줘" 또는 "solve_optimization 실행"\n`;
+    response += `- 설정된 조건으로 즉시 경로 최적화를 시작합니다\n\n`;
+    response += `**Option 2:** 🔧 설정 수정\n`;
+    response += `- "설정을 다시 조정해줘" 또는 "configure_problem 재실행"\n`;
+    response += `- 목표나 제약조건을 변경하고 싶을 때 선택하세요\n\n`;
+    response += `**Option 3:** 📊 데이터 재검토\n`;
+    response += `- "데이터를 다시 확인해줘" 또는 "prepare_data 재실행"\n`;
+    response += `- 입력 데이터를 수정하거나 검증하고 싶을 때 선택하세요\n\n`;
+    response += `💬 **어떤 작업을 원하시는지 말씀해주세요!**`;
 
     return {
       content: [{
@@ -202,6 +236,12 @@ export async function handleConfigureProblem(args: any): Promise<{ content: any[
 async function handleInteractiveConfiguration(sessionId: string): Promise<{ content: any[] }> {
   let response = `🤖 **대화형 최적화 설정**\n\n`;
   
+  // 세션 데이터 확인
+  const session = await sessionManager.loadSession(sessionId);
+  
+  // 데이터 기반 제약조건 감지
+  let timeConstraintData = await detectTimeConstraints(session);
+  
   response += `다음 질문들에 답해주세요:\n\n`;
   
   response += `**1. 주요 목표는 무엇인가요?**\n`;
@@ -210,19 +250,51 @@ async function handleInteractiveConfiguration(sessionId: string): Promise<{ cont
   response += `- 📏 "거리" → 총 이동거리 최소화\n`;
   response += `- 😊 "만족도" → 고객 만족도 향상\n\n`;
   
-  response += `**2. 중요한 제약조건은?**\n`;
-  response += `- 차량 용량 초과 금지\n`;
-  response += `- 고객 지정 시간대 준수\n`;
-  response += `- 운전자 근무시간 준수\n\n`;
+  response += `**2. 기본 제약조건 설정:**\n`;
+  response += `⚠️ **기본적으로 모든 제약조건은 비활성화됩니다.**\n\n`;
   
-  response += `**3. 특별한 요구사항이 있나요?**\n`;
+  // 데이터에 시간 정보가 있을 때만 선택권 제공
+  if (timeConstraintData.hasTimeWindows || timeConstraintData.hasWorkingHours) {
+    response += `📊 **데이터 분석 결과:**\n`;
+    
+    if (timeConstraintData.hasTimeWindows) {
+      response += `- 시간창 정보가 있는 주문: ${timeConstraintData.ordersWithTime}건\n`;
+    }
+    
+    if (timeConstraintData.hasWorkingHours) {
+      response += `- 근무시간 정보가 있는 운전자: ${timeConstraintData.driversWithTime}명\n`;
+    }
+    
+    response += `\n🤔 **시간 제약조건을 활성화하시겠습니까?**\n`;
+    
+    if (timeConstraintData.hasTimeWindows) {
+      response += `- "시간창 제약 적용" → 고객 지정 시간대 준수\n`;
+    }
+    
+    if (timeConstraintData.hasWorkingHours) {
+      response += `- "근무시간 제약 적용" → 운전자 근무시간 준수\n`;
+    }
+    
+    response += `- "시간 제약 없이" → 순수 거리/비용 최적화\n\n`;
+  }
+  
+  response += `**3. 차량 용량 제약:**\n`;
+  response += `- "용량 제약 적용" → 차량 과적 방지 (안전)\n`;
+  response += `- "용량 제약 무시" → 최대 효율성 추구\n\n`;
+  
+  response += `**4. 특별한 요구사항이 있나요?**\n`;
   response += `- 우선순위 고객 먼저 배송\n`;
   response += `- 여러 창고 동시 사용\n`;
   response += `- 정밀한 최적화 (시간 더 소요)\n\n`;
   
   response += `💡 **응답 예시:**\n`;
-  response += `"비용 최소화로 설정하고, 모든 제약조건을 적용해줘"\n`;
-  response += `"시간 단축을 우선으로 하되, 우선순위 배송도 적용해줘"`;
+  if (timeConstraintData.hasTimeWindows) {
+    response += `"비용 최소화로 설정하고, 시간창 제약과 용량 제약을 적용해줘"\n`;
+    response += `"거리 최소화로 하되, 시간 제약 없이 용량 제약만 적용해줘"\n`;
+  } else {
+    response += `"비용 최소화로 설정하고, 용량 제약을 적용해줘"\n`;
+    response += `"거리 최소화로 하되, 제약 없이 순수 최적화해줘"\n`;
+  }
   
   return {
     content: [{
@@ -230,6 +302,39 @@ async function handleInteractiveConfiguration(sessionId: string): Promise<{ cont
       text: response
     }]
   };
+}
+
+// 시간 제약조건 데이터 감지 함수
+async function detectTimeConstraints(session: any) {
+  let timeConstraintData = {
+    hasTimeWindows: false,
+    hasWorkingHours: false,
+    ordersWithTime: 0,
+    driversWithTime: 0
+  };
+  
+  if (session?.data_status?.drivers_loaded && session?.data_status?.orders_loaded) {
+    try {
+      const csvProcessor = await import('../utils/csv-processor.js');
+      const processor = new csvProcessor.CSVProcessor();
+      
+      const driversResult = await processor.readDrivers();
+      const ordersResult = await processor.readOrders();
+      
+      const drivers = driversResult.data;
+      const orders = ordersResult.data;
+      
+      timeConstraintData.hasTimeWindows = orders.some(order => order.time_window_start && order.time_window_end);
+      timeConstraintData.hasWorkingHours = drivers.some(driver => driver.working_hours_start || driver.working_hours_end);
+      timeConstraintData.ordersWithTime = orders.filter(order => order.time_window_start && order.time_window_end).length;
+      timeConstraintData.driversWithTime = drivers.filter(driver => driver.working_hours_start || driver.working_hours_end).length;
+      
+    } catch (error) {
+      console.warn('시간 제약조건 감지 실패:', error);
+    }
+  }
+  
+  return timeConstraintData;
 }
 
 // 최적화 설정 구성
@@ -241,40 +346,16 @@ async function buildOptimizationConfig(
   session: any
 ): Promise<OptimizationConfig> {
   
-  // 데이터 기반 시간 제약 자동 감지
-  let hasTimeConstraints = false;
+  // 데이터 기반 제약조건 감지 (정보 수집만, 자동 적용 안 함)
+  let timeConstraintData = await detectTimeConstraints(session);
   
-  if (session.data_status.drivers_loaded && session.data_status.orders_loaded) {
-    // 실제 데이터를 로드해서 시간 정보 확인
-    try {
-      const csvProcessor = await import('../utils/csv-processor.js');
-      const processor = new csvProcessor.CSVProcessor();
-      
-      const driversResult = await processor.readDrivers();
-      const ordersResult = await processor.readOrders();
-      
-      const drivers = driversResult.data;
-      const orders = ordersResult.data;
-      
-      // 시간 제약 조건 확인
-      hasTimeConstraints = orders.some(order => order.time_window_start && order.time_window_end) ||
-                           drivers.some(driver => driver.working_hours_start || driver.working_hours_end);
-      
-    } catch (error) {
-      console.warn('데이터 기반 시간 제약 감지 실패, 기본값 사용:', error);
-      hasTimeConstraints = true; // 안전한 기본값
-    }
-  } else {
-    hasTimeConstraints = true; // 데이터가 없으면 안전한 기본값
-  }
-  
-  // 기본값 설정 (시간 제약 자동 감지 반영)
+  // 기본값 설정 (모든 제약조건을 false로 시작)
   const config: OptimizationConfig = {
-    objective: (objective as any) || 'distance', // 내부 설정값 (API 변환시 minsum으로 변환됨)
+    objective: (objective as any) || 'distance',
     constraints: {
-      vehicle_capacity: constraints?.vehicle_capacity ?? true,
-      time_windows: constraints?.time_windows ?? hasTimeConstraints,
-      working_hours: constraints?.working_hours ?? hasTimeConstraints,
+      vehicle_capacity: constraints?.vehicle_capacity ?? false,  // 기본값: false
+      time_windows: constraints?.time_windows ?? false,          // 기본값: false
+      working_hours: constraints?.working_hours ?? false,        // 기본값: false
       max_vehicles: constraints?.max_vehicles
     },
     advanced_options: {

@@ -44,23 +44,43 @@ export async function handlePrepareData(args: any): Promise<{ content: any[] }> 
   try {
     const { session_id, auto_fix = false, detailed_analysis = true } = args;
 
-    // 1. 세션 로드
-    const session = await sessionManager.loadSession(session_id);
+    // 1. 세션 로드 (자동 검색 포함)
+    let session = await sessionManager.loadSession(session_id);
+    
+    // 세션을 찾을 수 없는 경우 최신 세션 자동 검색
     if (!session) {
-      return {
-        content: [{
-          type: 'text',
-          text: `❌ **세션을 찾을 수 없습니다**\n\n` +
-                `세션 ID: ${session_id}\n\n` +
-                `🔧 **해결 방법:**\n` +
-                `1. \`start_project\` 도구로 새 프로젝트를 시작하세요\n` +
-                `2. 기존 프로젝트 목록을 확인하려면 \`start_project\`를 실행하세요`
-        }]
-      };
+      const allSessions = await sessionManager.listSessions();
+      
+      if (allSessions.length > 0) {
+        // 가장 최근 세션 사용
+        session = allSessions[0];
+        
+        let response = `🔍 **자동 세션 검색 완료**\n\n`;
+        response += `요청한 세션 ID(${session_id})를 찾을 수 없어 가장 최근 프로젝트를 사용합니다.\n\n`;
+        response += `📊 **선택된 프로젝트:**\n`;
+        response += `- 이름: ${session.name}\n`;
+        response += `- ID: ${session.id}\n`;
+        response += `- 마지막 업데이트: ${new Date(session.updated_at).toLocaleString('ko-KR')}\n\n`;
+        
+        // 계속해서 데이터 준비 진행
+        // (아래 로직은 그대로 실행)
+      } else {
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ **세션을 찾을 수 없습니다**\n\n` +
+                  `세션 ID: ${session_id}\n\n` +
+                  `🔧 **해결 방법:**\n` +
+                  `1. \`start_project\` 도구로 새 프로젝트를 시작하세요\n` +
+                  `2. 기존 프로젝트 목록을 확인하려면 \`start_project\`를 실행하세요`
+          }]
+        };
+      }
     }
 
     let response = `📊 **데이터 준비 및 검증 시작**\n\n`;
-    response += `🔍 프로젝트: ${session.name} (ID: ${session_id})\n\n`;
+    response += `🔍 프로젝트: ${session.name}\n`;
+    response += `🆔 세션 ID: ${session.id}\n\n`;
 
     // 2. 파일 존재 여부 확인
     const filesExist = await csvProcessor.checkFilesExist();
@@ -69,18 +89,34 @@ export async function handlePrepareData(args: any): Promise<{ content: any[] }> 
     response += `- orders.csv: ${filesExist.orders ? '✅' : '❌'}\n`;
     response += `- depots.csv: ${filesExist.depots ? '✅' : '❌'}\n\n`;
 
-    if (!filesExist.drivers || !filesExist.orders) {
+    if (!filesExist.drivers || !filesExist.orders || !filesExist.depots) {
       return {
         content: [{
           type: 'text',
           text: response + 
-                `❌ **필수 파일이 누락되었습니다**\n\n` +
-                `최소한 drivers.csv와 orders.csv 파일이 필요합니다.\n\n` +
-                `🔧 **해결 방법:**\n` +
-                `1. ProblemData 폴더에 필요한 CSV 파일을 생성하세요\n` +
-                `2. 또는 \`start_project\`에서 \`force_new: true\`로 샘플 데이터를 다시 생성하세요`
+                `❌ **필수 데이터 파일이 누락되었습니다**\n\n` +
+                `배송 최적화를 위해서는 최소한 drivers.csv와 orders.csv, depots.csv 파일이 필요합니다.\n\n` +
+                `📂 **데이터 준비 방법:**\n` +
+                `1. ProblemData 폴더에 CSV 파일을 직접 생성\n` +
+                `2. 채팅창에 CSV 파일 업로드\n` +
+                `3. 데이터를 직접 텍스트로 입력\n\n` +
+                `어떤 방법으로 데이터를 준비하시겠습니까?`
         }]
       };
+    }
+
+    // 파일이 있는 경우 사용 확인
+    let useExistingFiles = true;
+    if (filesExist.drivers && filesExist.orders) {
+      response += `✅ **기존 데이터 파일 발견**\n\n`;
+      response += `ProblemData 폴더에서 다음 파일들을 찾았습니다:\n`;
+      response += `- drivers.csv: 운전자 정보\n`;
+      response += `- orders.csv: 배송 주문 정보\n`;
+      if (filesExist.depots) {
+        response += `- depots.csv: 창고 정보\n`;
+      }
+      response += `\n이 파일들을 사용하여 진행하시겠습니까?\n\n`;
+      response += `**다른 데이터를 사용하고 싶으시면** 새로운 CSV 파일을 업로드하거나 직접 입력해주세요.\n\n`;
     }
 
     // 3. 데이터 읽기 및 검증
@@ -113,15 +149,19 @@ export async function handlePrepareData(args: any): Promise<{ content: any[] }> 
     }
 
     // 7. 세션 상태 업데이트
-    await updateSessionDataStatus(session_id, validationResults, analysisResult.isValid);
+    await updateSessionDataStatus(session.id, validationResults, analysisResult.isValid);
 
-    // 8. 다음 단계 안내
+    // 8. 단계 완료 및 사용자 선택 제시
     if (analysisResult.isValid) {
-      await sessionManager.completeStep(session_id, 'prepare_data');
-      response += `\n🎯 **다음 단계:**\n`;
-      response += `데이터 검증이 완료되었습니다! \`configure_problem\` 도구를 실행하여 최적화 문제를 설정하세요.\n\n`;
-      response += `💡 **명령어 예시:**\n`;
-      response += `"비용 최소화로 문제 설정해줘" 또는 "configure_problem 실행해줘"`;
+      await sessionManager.completeStep(session.id, 'prepare_data');
+      response += `\n✅ **2단계 완료: 데이터 준비**\n\n`;
+      response += `🤔 **다음으로 어떻게 진행하시겠습니까?**\n`;
+      response += `다음 중 하나를 선택해주세요:\n\n`;
+      response += `1. **비용 최소화 설정** - "비용 최소화로 문제 설정해줘"\n`;
+      response += `2. **시간 단축 설정** - "시간 단축을 우선으로 설정해줘"\n`;
+      response += `3. **거리 최소화 설정** - "거리 최소화로 설정해줘"\n`;
+      response += `4. **맞춤 설정** - "최적화 옵션을 상세히 설정하고 싶어"\n\n`;
+      response += `💡 원하는 목표를 말씀해주세요!`;
     } else {
       response += `\n⚠️ **추가 작업 필요:**\n`;
       response += `데이터 오류를 수정한 후 다시 \`prepare_data\`를 실행해주세요.\n`;

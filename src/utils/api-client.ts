@@ -57,7 +57,7 @@ export class OmeletAPIClient {
     
     this.client = axios.create({
       baseURL: this.baseUrl,
-      timeout: 30000, // 30초 기본 타임아웃
+      timeout: 120000, // 120초로 타임아웃 증가 (OMELET API 최대 시간 제한에 맞춤)
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/vnd.omelet.v2+json',
@@ -85,9 +85,17 @@ export class OmeletAPIClient {
         return response;
       },
       (error) => {
-        console.error('❌ API 응답 오류:', error.response?.status, error.response?.statusText);
-        if (error.response?.data) {
+        if (error.response) {
+          // 서버 응답이 있는 경우
+          console.error('❌ API 응답 오류:', error.response.status, error.response.statusText);
           console.error('📄 오류 세부사항:', error.response.data);
+        } else if (error.request) {
+          // 요청은 보냈지만 응답이 없는 경우
+          console.error('❌ 네트워크 오류: 서버에서 응답이 없습니다');
+          console.error('📡 요청 정보:', error.request);
+        } else {
+          // 요청 설정 중 오류
+          console.error('❌ 요청 설정 오류:', error.message);
         }
         return Promise.reject(error);
       }
@@ -239,7 +247,6 @@ export class OmeletAPIClient {
       
       depot = {
         name: depots[0].name || 'Main Depot',
-        index: 0,
         coordinate: { lng: depotLng, lat: depotLat }
       };
     } else if (drivers.length > 0) {
@@ -256,7 +263,6 @@ export class OmeletAPIClient {
       
       depot = {
         name: 'Default Depot',
-        index: 0,
         coordinate: { lng: driverLng, lat: driverLat }
       };
     } else {
@@ -282,7 +288,6 @@ export class OmeletAPIClient {
 
       const visit: any = {
         name: order.order_id || `Order_${index + 1}`,
-        index: index + 1, // depot은 0, visits는 1부터 시작
         coordinate: { lng, lat },
         volume: Math.max(0, Number(order.volume) || 0),
         weight: Math.max(0, Number(order.weight) || 0),
@@ -310,14 +315,18 @@ export class OmeletAPIClient {
     const vehicles = drivers.map((driver, index) => {
       const vehicle: any = {
         name: driver.name || `Vehicle_${index + 1}`,
-        volume_capacity: Math.max(1, Number(driver.capacity) || 1000),
-        weight_capacity: Math.max(1, Number(driver.capacity) || 1000), 
         fixed_cost: 0,
         unit_distance_cost: Math.max(0, Number(driver.cost_per_km) || 1),
         unit_duration_cost: 0,
         vehicle_type: 'car' as const,
         return_to_depot: true
       };
+
+      // 용량 제약이 활성화된 경우에만 용량 필드 추가
+      if (options?.enableCapacityConstraint) {
+        vehicle.volume_capacity = Math.max(1, Number(driver.capacity) || 1000);
+        vehicle.weight_capacity = Math.max(1, Number(driver.capacity) || 1000);
+      }
 
       // 근무시간이 있는 경우에만 추가 (UTC timezone 포함 ISO 8601 형식)
       if (driver.working_hours_start) {
@@ -332,13 +341,16 @@ export class OmeletAPIClient {
       return vehicle;
     });
 
-    // API 옵션 설정 (OMELET API v2 스펙 준수)
+    // 대규모 문제 감지 (가이드 기준: 1000+ visits or 50+ vehicles)
+    const isLargeProblem = visits.length > 1000 || vehicles.length > 50;
+    
+    // API 옵션 설정 (ConstrainsSettingRules.json 기준)
     const apiOption = {
-      timelimit: Math.min(options?.timeLimit || 30, 120), // API 제한 120초 적용
-      objective_type: (options?.objective === 'minmax') ? 'minmax' as const : 'minsum' as const, // minsum/minmax만 지원
+      timelimit: isLargeProblem ? 300 : (hasTimeConstraints ? 30 : 10), // 가이드 기준 시간 설정
+      objective_type: (!options?.enableCapacityConstraint && vehicles.length > 1) ? 'minmax' as const : 'minsum' as const, // 다중차량 TSP는 minmax
       distance_type: options?.distanceType || 'euclidean',
-      allow_unassigned_visits: options?.allowUnassignedVisits || false,
-      use_large_size_optimization_algorithm: (visits.length > 50 || vehicles.length > 5), // 더 보수적인 기준
+      allow_unassigned_visits: isLargeProblem, // 대규모 문제에서만 true
+      use_large_size_optimization_algorithm: isLargeProblem, // 대규모 문제에서만 true
       include_departure_cost_from_depot: true,
       include_return_cost_to_depot: true
     };
