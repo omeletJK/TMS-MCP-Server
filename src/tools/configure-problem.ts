@@ -18,10 +18,6 @@ export const configureProblemTool: Tool = {
   inputSchema: {
     type: 'object',
     properties: {
-      session_id: {
-        type: 'string',
-        description: '프로젝트 세션 ID (필수)'
-      },
       objective: {
         type: 'string',
         enum: ['cost', 'time', 'distance', 'satisfaction'],
@@ -92,14 +88,13 @@ export const configureProblemTool: Tool = {
         default: false
       }
     },
-    required: ['session_id']
+    required: []
   }
 };
 
 export async function handleConfigureProblem(args: any): Promise<{ content: any[] }> {
   try {
     const { 
-      session_id, 
       objective, 
       constraints, 
       advanced_options,
@@ -107,17 +102,16 @@ export async function handleConfigureProblem(args: any): Promise<{ content: any[
       interactive_mode = false 
     } = args;
 
-    // 1. 세션 로드
-    const session = await sessionManager.loadSession(session_id);
+    // 1. 활성 세션 가져오기
+    const session = await sessionManager.getActiveSession();
     if (!session) {
       return {
         content: [{
           type: 'text',
-          text: `❌ **세션을 찾을 수 없습니다**\n\n` +
-                `세션 ID: ${session_id}\n\n` +
+          text: `❌ **활성 프로젝트가 없습니다**\n\n` +
                 `🔧 **해결 방법:**\n` +
                 `1. \`start_project\` 도구로 새 프로젝트를 시작하세요\n` +
-                `2. 올바른 세션 ID를 사용하세요`
+                `2. \`prepare_data\` 도구로 데이터를 먼저 준비하세요`
         }]
       };
     }
@@ -136,11 +130,11 @@ export async function handleConfigureProblem(args: any): Promise<{ content: any[
     }
 
     let response = `⚙️ **최적화 문제 설정**\n\n`;
-    response += `🔍 프로젝트: ${session.name} (ID: ${session_id})\n\n`;
+    response += `🔍 프로젝트: ${session.name} (ID: ${session.id})\n\n`;
 
     // 3. 대화형 모드 처리
     if (interactive_mode && !objective) {
-      return await handleInteractiveConfiguration(session_id);
+      return await handleInteractiveConfiguration(session.id);
     }
 
     // 4. 제약조건 사전 검증 (데이터 기반)
@@ -192,7 +186,7 @@ export async function handleConfigureProblem(args: any): Promise<{ content: any[
     // 8. 세션에 설정 저장
     session.config = config;
     await sessionManager.saveSession(session);
-    await sessionManager.completeStep(session_id, 'configure_problem');
+    await sessionManager.completeStep(session.id, 'configure_problem');
 
     // 9. 다음 작업 선택 옵션 제공
     response += `\n✅ **3단계 완료: 문제 설정이 완료되었습니다!**\n\n`;

@@ -21,10 +21,6 @@ export const prepareDataTool: Tool = {
   inputSchema: {
     type: 'object',
     properties: {
-      session_id: {
-        type: 'string',
-        description: '프로젝트 세션 ID (필수)'
-      },
       auto_fix: {
         type: 'boolean',
         description: '자동으로 수정 가능한 오류들을 수정할지 여부 (기본: false)',
@@ -36,46 +32,26 @@ export const prepareDataTool: Tool = {
         default: true
       }
     },
-    required: ['session_id']
+    required: []
   }
 };
 
 export async function handlePrepareData(args: any): Promise<{ content: any[] }> {
   try {
-    const { session_id, auto_fix = false, detailed_analysis = true } = args;
+    const { auto_fix = false, detailed_analysis = true } = args;
 
-    // 1. 세션 로드 (자동 검색 포함)
-    let session = await sessionManager.loadSession(session_id);
-    
-    // 세션을 찾을 수 없는 경우 최신 세션 자동 검색
+    // 1. 활성 세션 가져오기
+    const session = await sessionManager.getActiveSession();
     if (!session) {
-      const allSessions = await sessionManager.listSessions();
-      
-      if (allSessions.length > 0) {
-        // 가장 최근 세션 사용
-        session = allSessions[0];
-        
-        let response = `🔍 **자동 세션 검색 완료**\n\n`;
-        response += `요청한 세션 ID(${session_id})를 찾을 수 없어 가장 최근 프로젝트를 사용합니다.\n\n`;
-        response += `📊 **선택된 프로젝트:**\n`;
-        response += `- 이름: ${session.name}\n`;
-        response += `- ID: ${session.id}\n`;
-        response += `- 마지막 업데이트: ${new Date(session.updated_at).toLocaleString('ko-KR')}\n\n`;
-        
-        // 계속해서 데이터 준비 진행
-        // (아래 로직은 그대로 실행)
-      } else {
-        return {
-          content: [{
-            type: 'text',
-            text: `❌ **세션을 찾을 수 없습니다**\n\n` +
-                  `세션 ID: ${session_id}\n\n` +
-                  `🔧 **해결 방법:**\n` +
-                  `1. \`start_project\` 도구로 새 프로젝트를 시작하세요\n` +
-                  `2. 기존 프로젝트 목록을 확인하려면 \`start_project\`를 실행하세요`
-          }]
-        };
-      }
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ **활성 프로젝트가 없습니다**\n\n` +
+                `🔧 **해결 방법:**\n` +
+                `1. \`start_project\` 도구로 새 프로젝트를 시작하세요\n` +
+                `2. 프로젝트를 먼저 생성한 후 데이터 준비를 진행하세요`
+        }]
+      };
     }
 
     let response = `📊 **데이터 준비 및 검증 시작**\n\n`;

@@ -9,6 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const SESSIONS_DIR = path.join(__dirname, '..', '..', 'sessions');
 const SESSION_FILE_PREFIX = 'project_';
+const ACTIVE_SESSION_FILE = path.join(SESSIONS_DIR, 'active_session.json');
 
 // 워크플로우 단계 가이드
 export const WORKFLOW_GUIDES: Record<WorkflowStep, StepGuide> = {
@@ -93,6 +94,7 @@ export class SessionManager {
     };
 
     await this.saveSession(session);
+    await this.setActiveSession(session.id); // 활성 세션으로 설정
     return session;
   }
 
@@ -162,8 +164,7 @@ export class SessionManager {
   async completeStep(sessionId: string, step: WorkflowStep): Promise<void> {
     const session = await this.loadSession(sessionId);
     if (!session) {
-      console.warn(`Session ${sessionId} not found for completeStep`);
-      return; // 조용히 실패
+      throw new Error(`Session ${sessionId} not found`);
     }
 
     if (!session.steps_completed.includes(step)) {
@@ -197,6 +198,47 @@ export class SessionManager {
     const percentage = Math.round((completed / total) * 100);
 
     return { completed, total, percentage };
+  }
+
+  // 활성 세션 설정
+  async setActiveSession(sessionId: string): Promise<void> {
+    try {
+      await fs.writeJSON(ACTIVE_SESSION_FILE, { activeSessionId: sessionId });
+    } catch (error) {
+      console.error('Failed to set active session:', error);
+    }
+  }
+
+  // 활성 세션 가져오기
+  async getActiveSession(): Promise<ProjectSession | null> {
+    try {
+      if (!(await fs.pathExists(ACTIVE_SESSION_FILE))) {
+        return null;
+      }
+      
+      const activeData = await fs.readJSON(ACTIVE_SESSION_FILE);
+      const sessionId = activeData.activeSessionId;
+      
+      if (!sessionId) {
+        return null;
+      }
+      
+      return await this.loadSession(sessionId);
+    } catch (error) {
+      console.error('Failed to get active session:', error);
+      return null;
+    }
+  }
+
+  // 활성 세션 클리어
+  async clearActiveSession(): Promise<void> {
+    try {
+      if (await fs.pathExists(ACTIVE_SESSION_FILE)) {
+        await fs.remove(ACTIVE_SESSION_FILE);
+      }
+    } catch (error) {
+      console.error('Failed to clear active session:', error);
+    }
   }
 
   // 세션 파일 경로 생성
