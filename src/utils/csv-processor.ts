@@ -44,19 +44,34 @@ export const CSV_FILES = {
 } as const;
 
 export class CSVProcessor {
-  constructor() {
+  private currentDataDir: string;
+
+  constructor(dataDir?: string) {
+    this.currentDataDir = dataDir || PROBLEM_DATA_DIR;
     this.ensureProblemDataDir();
   }
 
   private ensureProblemDataDir(): void {
-    if (!fs.existsSync(PROBLEM_DATA_DIR)) {
-      fs.mkdirSync(PROBLEM_DATA_DIR, { recursive: true });
+    if (!fs.existsSync(this.currentDataDir)) {
+      fs.mkdirSync(this.currentDataDir, { recursive: true });
     }
+  }
+
+  // 데이터 디렉토리 변경
+  setDataDir(dataDir: string): void {
+    this.currentDataDir = dataDir;
+    this.ensureProblemDataDir();
+  }
+
+  // 현재 데이터 디렉토리 반환
+  getCurrentDataDir(): string {
+    return this.currentDataDir;
   }
 
   // CSV 파일 읽기
   async readCSV<T>(filename: string): Promise<T[]> {
-    const filePath = path.join(PROBLEM_DATA_DIR, filename);
+    const filePath = path.join(this.currentDataDir, filename);
+    console.warn(`DEBUG: CSV 파일 읽기 시도: ${filePath}`);
     
     if (!(await fs.pathExists(filePath))) {
       throw new TMSError(
@@ -209,7 +224,10 @@ export class CSVProcessor {
     const numericFields = [
       'start_location_lat', 'start_location_lng', 'end_location_lat', 'end_location_lng',
       'pickup_lat', 'pickup_lng', 'delivery_lat', 'delivery_lng',
-      'lat', 'lng', 'capacity', 'weight', 'volume', 'priority', 'cost_per_km'
+      'lat', 'lng', 'capacity', 'weight', 'volume', 'priority', 'cost_per_km',
+      // 새로운 필드들 추가
+      'service_time', 'volume_capacity', 'fixed_cost', 'unit_distance_cost', 'unit_duration_cost',
+      'visit_preference_1', 'visit_preference_2', 'visit_preference_3', 'visit_preference_4'
     ];
 
     const converted = { ...data };

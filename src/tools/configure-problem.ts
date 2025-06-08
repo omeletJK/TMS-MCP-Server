@@ -1,91 +1,82 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { SessionManager } from '../utils/session-manager.js';
 import { OptimizationConfig } from '../types/index.js';
+import { CSVProcessor } from '../utils/csv-processor.js';
+import { OmeletAPIClient } from '../utils/api-client.js';
 
 const sessionManager = new SessionManager();
+const csvProcessor = new CSVProcessor();
+const apiClient = new OmeletAPIClient();
 
 export const configureProblemTool: Tool = {
   name: 'configure_problem',
   description: `최적화 문제를 설정합니다.
 
-이 도구는 다음과 같은 작업을 수행합니다:
-- 비즈니스 목표 설정 (비용/시간/거리/만족도 최소화)
-- 실무 제약조건 설정 (용량, 시간창, 근무시간 등)
-- 고급 옵션 구성 (다중 창고, 우선순위, 최적화 강도)
-- 설정 요약 및 사용자 확인
-- 세션에 설정 저장`,
+이 도구는 다음과 같은 워크플로우를 제공합니다:
+1. 데이터 기반 자동 감지 및 기본 설정 제안
+2. 최적화 목표 선택 (비용/시간/거리/고객만족도)
+3. 제약 조건 검토 및 사용자 선택적 변경
+4. 고급 옵션 구성
+5. 설정 요약 및 확정
+
+중요: AI는 절대로 임의로 제약 조건을 변경하지 않으며, 모든 변경은 사용자의 명시적 지시에서만 가능합니다.`,
   
   inputSchema: {
     type: 'object',
     properties: {
+      step: {
+        type: 'string',
+        enum: ['analyze', 'objective', 'constraints', 'advanced', 'confirm'],
+        description: '설정 단계: analyze(데이터분석), objective(목표선택), constraints(제약변경), advanced(고급옵션), confirm(확정)',
+        default: 'analyze'
+      },
       objective: {
         type: 'string',
         enum: ['cost', 'time', 'distance', 'satisfaction'],
         description: '최적화 목표: cost(비용최소화), time(시간단축), distance(거리최소화), satisfaction(고객만족도)'
       },
-      constraints: {
+      constraint_overrides: {
         type: 'object',
         properties: {
           vehicle_capacity: {
             type: 'boolean',
-            description: '차량 용량 제약 적용 여부 (기본값: false, 필요시에만 명시적으로 활성화)'
+            description: '차량 용량 제약 강제 변경 (데이터 기반 자동 감지를 무시)'
           },
           time_windows: {
             type: 'boolean',
-            description: '시간창 제약 적용 여부 (기본값: false, 데이터에 시간창이 있을 때만 활성화 권장)'
+            description: '시간창 제약 강제 변경 (데이터 기반 자동 감지를 무시)'
           },
           working_hours: {
             type: 'boolean',
-            description: '근무시간 제약 적용 여부 (기본값: false, 데이터에 근무시간이 있을 때만 활성화 권장)'
+            description: '근무시간 제약 강제 변경 (데이터 기반 자동 감지를 무시)'
           },
           max_vehicles: {
             type: 'number',
-            description: '최대 사용 가능 차량 수'
+            description: '최대 사용 가능 차량 수 제한'
           }
         }
       },
       advanced_options: {
         type: 'object',
         properties: {
-          multi_depot: {
-            type: 'boolean',
-            description: '다중 창고 모드 활성화',
-            default: false
-          },
-          priority_delivery: {
-            type: 'boolean',
-            description: '우선순위 배송 적용',
-            default: true
-          },
           optimization_intensity: {
             type: 'string',
             enum: ['fast', 'balanced', 'thorough'],
-            description: '최적화 강도: fast(빠름), balanced(균형), thorough(정밀)',
+            description: '최적화 강도: fast(30초), balanced(60초), thorough(120초)',
             default: 'balanced'
+          },
+          distance_type: {
+            type: 'string',
+            enum: ['euclidean', 'manhattan', 'osrm'],
+            description: '거리 계산 방식: euclidean(직선거리), manhattan(맨하탄), osrm(실제도로)',
+            default: 'euclidean'
+          },
+          allow_unassigned: {
+            type: 'boolean',
+            description: '미할당 주문 허용 여부',
+            default: true
           }
         }
-      },
-      business_rules: {
-        type: 'object',
-        properties: {
-          break_duration: {
-            type: 'number',
-            description: '휴식 시간 (분)'
-          },
-          max_working_hours: {
-            type: 'number',
-            description: '최대 근무 시간 (시간)'
-          },
-          fuel_cost_per_km: {
-            type: 'number',
-            description: 'km당 연료비 (원)'
-          }
-        }
-      },
-      interactive_mode: {
-        type: 'boolean',
-        description: '대화형 설정 모드 (단계별 질문)',
-        default: false
       }
     },
     required: []
@@ -95,11 +86,10 @@ export const configureProblemTool: Tool = {
 export async function handleConfigureProblem(args: any): Promise<{ content: any[] }> {
   try {
     const { 
+      step = 'analyze',
       objective, 
-      constraints, 
-      advanced_options,
-      business_rules,
-      interactive_mode = false 
+      constraint_overrides,
+      advanced_options
     } = args;
 
     // 1. 활성 세션 가져오기
@@ -129,78 +119,119 @@ export async function handleConfigureProblem(args: any): Promise<{ content: any[
       };
     }
 
-    let response = `⚙️ **최적화 문제 설정**\n\n`;
-    response += `🔍 프로젝트: ${session.name} (ID: ${session.id})\n\n`;
-
-    // 3. 대화형 모드 처리
-    if (interactive_mode && !objective) {
-      return await handleInteractiveConfiguration(session.id);
-    }
-
-    // 4. 제약조건 사전 검증 (데이터 기반)
-    const timeConstraintData = await detectTimeConstraints(session);
-    let validatedConstraints = constraints;
-    
-    // 시간 제약조건이 true로 설정되었지만 데이터에 시간 정보가 없는 경우 경고 및 자동 수정
-    if (constraints?.time_windows === true && !timeConstraintData.hasTimeWindows) {
-      response += `⚠️ **시간창 제약 경고**: 데이터에 시간창 정보가 없어 시간창 제약을 비활성화했습니다.\n\n`;
-      validatedConstraints = { ...constraints, time_windows: false };
-    }
-    
-    if (constraints?.working_hours === true && !timeConstraintData.hasWorkingHours) {
-      response += `⚠️ **근무시간 제약 경고**: 데이터에 근무시간 정보가 없어 근무시간 제약을 비활성화했습니다.\n\n`;
-      validatedConstraints = { ...validatedConstraints, working_hours: false };
-    }
-    
-    // 제약조건이 명시적으로 전달된 경우 사용자에게 알림
-    if (constraints && Object.keys(constraints).length > 0) {
-      response += `📋 **전달받은 제약조건:**\n`;
-      response += `- 차량 용량 제약: ${constraints.vehicle_capacity === true ? '요청됨' : '비활성화'}\n`;
-      response += `- 시간창 제약: ${constraints.time_windows === true ? '요청됨' : '비활성화'}\n`;
-      response += `- 근무시간 제약: ${constraints.working_hours === true ? '요청됨' : '비활성화'}\n\n`;
+    // 3. 단계별 처리
+    switch (step) {
+      case 'analyze':
+        return await handleDataAnalysisStep(session);
       
-      if (constraints.time_windows === true || constraints.working_hours === true) {
-        response += `💡 **데이터 검증 결과:**\n`;
-        response += `- 시간창 정보: ${timeConstraintData.hasTimeWindows ? `있음 (${timeConstraintData.ordersWithTime}건)` : '없음'}\n`;
-        response += `- 근무시간 정보: ${timeConstraintData.hasWorkingHours ? `있음 (${timeConstraintData.driversWithTime}명)` : '없음'}\n\n`;
-      }
+      case 'objective':
+        return await handleObjectiveSelectionStep(session, objective);
+      
+      case 'constraints':
+        return await handleConstraintConfigurationStep(session, constraint_overrides);
+      
+      case 'advanced':
+        return await handleAdvancedOptionsStep(session, advanced_options);
+      
+      case 'confirm':
+        return await handleConfirmationStep(session);
+      
+      default:
+        return await handleDataAnalysisStep(session);
     }
 
-    // 5. 설정값 처리 및 검증 (검증된 제약조건 사용)
-    const config = await buildOptimizationConfig(
-      objective, 
-      validatedConstraints, 
-      advanced_options, 
-      business_rules,
-      session
+  } catch (error) {
+    console.error('Configure problem error:', error);
+    
+    return {
+      content: [{
+        type: 'text',
+        text: `❌ **최적화 설정 중 오류가 발생했습니다**\n\n` +
+              `오류 내용: ${error instanceof Error ? error.message : '알 수 없는 오류'}\n\n` +
+              `🔧 **해결 방법:**\n` +
+              `1. 세션 ID가 올바른지 확인해주세요\n` +
+              `2. 이전 단계들이 완료되었는지 확인해주세요\n` +
+              `3. 다시 시도해보세요`
+      }]
+    };
+  }
+}
+
+// 1단계: 데이터 분석 및 기본 설정 자동 감지
+async function handleDataAnalysisStep(session: any): Promise<{ content: any[] }> {
+  let response = `🔍 **1단계: 데이터 분석 및 자동 감지**\n\n`;
+  response += `📋 프로젝트: ${session.name} (ID: ${session.id})\n\n`;
+
+  try {
+    // 데이터 로드
+    const [drivers, orders, depots] = await Promise.all([
+      csvProcessor.readDrivers(),
+      csvProcessor.readOrders(),
+      csvProcessor.readDepots()
+    ]);
+
+    // API 클라이언트를 통한 자동 감지
+    const capacityDetected = apiClient.shouldEnableCapacityConstraintFromData(drivers.data, orders.data);
+    const timeWindowsDetected = orders.data.some(order => 
+      order.time_window_start && order.time_window_end
+    );
+    const workingHoursDetected = drivers.data.some(driver => 
+      driver.working_hours_start || driver.working_hours_end
     );
 
-    // 6. 설정 요약 생성
-    const configSummary = generateConfigSummary(config);
-    response += configSummary;
+    // 데이터 통계
+    response += `📊 **데이터 현황:**\n`;
+    response += `- 운전자: ${drivers.data.length}명\n`;
+    response += `- 주문: ${orders.data.length}건\n`;
+    response += `- 창고: ${depots.data.length}개\n\n`;
 
-    // 7. 비즈니스 영향 분석
-    const impactAnalysis = analyzeBusinessImpact(config, session);
-    response += impactAnalysis;
+    // 자동 감지 결과
+    response += `🤖 **자동 감지된 제약 조건:**\n\n`;
+    
+    response += `🚛 **차량 용량 제약**: ${capacityDetected ? '✅ 활성화' : '❌ 비활성화'}\n`;
+    if (capacityDetected) {
+      const capacities = drivers.data.filter(d => Number(d.capacity) > 0).map(d => d.capacity);
+      const weights = orders.data.filter(o => Number(o.weight) > 0).map(o => o.weight);
+      response += `   - 차량 용량: ${capacities.join(', ')}\n`;
+      response += `   - 주문 무게: ${weights.join(', ')}\n`;
+    } else {
+      response += `   - 이유: 용량/무게 데이터가 모두 0 또는 없음\n`;
+    }
 
-    // 8. 세션에 설정 저장
-    session.config = config;
+    response += `\n⏰ **시간창 제약**: ${timeWindowsDetected ? '✅ 활성화' : '❌ 비활성화'}\n`;
+    if (timeWindowsDetected) {
+      const timeWindowCount = orders.data.filter(o => o.time_window_start && o.time_window_end).length;
+      response += `   - ${timeWindowCount}개 주문에 시간창 설정됨\n`;
+    } else {
+      response += `   - 이유: 시간창 데이터 없음\n`;
+    }
+
+    response += `\n👨‍💼 **근무시간 제약**: ${workingHoursDetected ? '✅ 활성화' : '❌ 비활성화'}\n`;
+    if (workingHoursDetected) {
+      const workingHoursCount = drivers.data.filter(d => d.working_hours_start || d.working_hours_end).length;
+      response += `   - ${workingHoursCount}명 운전자에 근무시간 설정됨\n`;
+    } else {
+      response += `   - 이유: 근무시간 데이터 없음\n`;
+    }
+
+    // 세션에 자동 감지 결과 저장
+    session.auto_detected_constraints = {
+      vehicle_capacity: capacityDetected,
+      time_windows: timeWindowsDetected,
+      working_hours: workingHoursDetected,
+      detected_at: new Date().toISOString()
+    };
+
     await sessionManager.saveSession(session);
-    await sessionManager.completeStep(session.id, 'configure_problem');
 
-    // 9. 다음 작업 선택 옵션 제공
-    response += `\n✅ **3단계 완료: 문제 설정이 완료되었습니다!**\n\n`;
-    response += `🎯 **다음에 무엇을 하시겠습니까?**\n\n`;
-    response += `**Option 1:** 🚀 최적화 실행\n`;
-    response += `- "최적화를 시작해줘" 또는 "solve_optimization 실행"\n`;
-    response += `- 설정된 조건으로 즉시 경로 최적화를 시작합니다\n\n`;
-    response += `**Option 2:** 🔧 설정 수정\n`;
-    response += `- "설정을 다시 조정해줘" 또는 "configure_problem 재실행"\n`;
-    response += `- 목표나 제약조건을 변경하고 싶을 때 선택하세요\n\n`;
-    response += `**Option 3:** 📊 데이터 재검토\n`;
-    response += `- "데이터를 다시 확인해줘" 또는 "prepare_data 재실행"\n`;
-    response += `- 입력 데이터를 수정하거나 검증하고 싶을 때 선택하세요\n\n`;
-    response += `💬 **어떤 작업을 원하시는지 말씀해주세요!**`;
+    response += `\n🎯 **다음 단계:**\n`;
+    response += `**Option 1:** 목표 선택하기\n`;
+    response += `- \`configure_problem\` 도구에 \`step: "objective"\`와 \`objective: "cost|time|distance|satisfaction"\` 전달\n`;
+    response += `- 예: "비용 최소화로 목표 설정해줘"\n\n`;
+    response += `**Option 2:** 제약 조건 변경하기\n`;
+    response += `- \`configure_problem\` 도구에 \`step: "constraints"\`와 원하는 변경사항 전달\n`;
+    response += `- 예: "용량 제약을 비활성화해줘"\n\n`;
+    response += `⚠️ **중요**: AI는 절대로 임의로 제약 조건을 변경하지 않습니다. 모든 변경은 사용자의 명시적 지시가 필요합니다.`;
 
     return {
       content: [{
@@ -210,86 +241,84 @@ export async function handleConfigureProblem(args: any): Promise<{ content: any[
     };
 
   } catch (error) {
-    console.error('Configure problem error:', error);
-    
+    response += `❌ **데이터 분석 실패**: ${error instanceof Error ? error.message : '알 수 없는 오류'}\n\n`;
+    response += `🔧 **해결 방법:**\n`;
+    response += `1. 데이터 파일이 올바른 형식인지 확인해주세요\n`;
+    response += `2. \`prepare_data\` 도구를 다시 실행해보세요`;
+
     return {
       content: [{
         type: 'text',
-        text: `❌ **문제 설정 중 오류가 발생했습니다**\n\n` +
-              `오류 내용: ${error instanceof Error ? error.message : '알 수 없는 오류'}\n\n` +
-              `🔧 **해결 방법:**\n` +
-              `1. 입력 매개변수를 확인해주세요\n` +
-              `2. 세션 ID가 올바른지 확인해주세요\n` +
-              `3. 다시 시도해보세요`
+        text: response
       }]
     };
   }
 }
 
-// 대화형 설정 처리
-async function handleInteractiveConfiguration(sessionId: string): Promise<{ content: any[] }> {
-  let response = `🤖 **대화형 최적화 설정**\n\n`;
-  
-  // 세션 데이터 확인
-  const session = await sessionManager.loadSession(sessionId);
-  
-  // 데이터 기반 제약조건 감지
-  let timeConstraintData = await detectTimeConstraints(session);
-  
-  response += `다음 질문들에 답해주세요:\n\n`;
-  
-  response += `**1. 주요 목표는 무엇인가요?**\n`;
-  response += `- 🚗 "비용" → 총 운송비용 최소화\n`;
-  response += `- ⏰ "시간" → 배송 시간 단축\n`;
-  response += `- 📏 "거리" → 총 이동거리 최소화\n`;
-  response += `- 😊 "만족도" → 고객 만족도 향상\n\n`;
-  
-  response += `**2. 기본 제약조건 설정:**\n`;
-  response += `⚠️ **기본적으로 모든 제약조건은 비활성화됩니다.**\n\n`;
-  
-  // 데이터에 시간 정보가 있을 때만 선택권 제공
-  if (timeConstraintData.hasTimeWindows || timeConstraintData.hasWorkingHours) {
-    response += `📊 **데이터 분석 결과:**\n`;
+// 2단계: 최적화 목표 선택
+async function handleObjectiveSelectionStep(session: any, objective?: string): Promise<{ content: any[] }> {
+  let response = `🎯 **2단계: 최적화 목표 선택**\n\n`;
+
+  if (!objective) {
+    response += `📋 **사용 가능한 최적화 목표:**\n\n`;
+    response += `💰 **cost** - 비용 최소화\n`;
+    response += `   - 연료비, 인건비, 차량 운영비 등 총 비용 최소화\n`;
+    response += `   - 추천: 물류 비용 절감이 주요 목표일 때\n\n`;
     
-    if (timeConstraintData.hasTimeWindows) {
-      response += `- 시간창 정보가 있는 주문: ${timeConstraintData.ordersWithTime}건\n`;
-    }
+    response += `⏰ **time** - 시간 단축\n`;
+    response += `   - 총 배송 시간 및 대기 시간 최소화\n`;
+    response += `   - 추천: 빠른 배송이 경쟁력일 때\n\n`;
     
-    if (timeConstraintData.hasWorkingHours) {
-      response += `- 근무시간 정보가 있는 운전자: ${timeConstraintData.driversWithTime}명\n`;
-    }
+    response += `📏 **distance** - 거리 최소화\n`;
+    response += `   - 총 이동 거리 최소화\n`;
+    response += `   - 추천: 환경 친화적 운영이나 차량 마모 최소화\n\n`;
     
-    response += `\n🤔 **시간 제약조건을 활성화하시겠습니까?**\n`;
+    response += `😊 **satisfaction** - 고객 만족도\n`;
+    response += `   - 시간창 준수 및 우선순위 배송 최적화\n`;
+    response += `   - 추천: 고객 서비스 품질이 우선일 때\n\n`;
     
-    if (timeConstraintData.hasTimeWindows) {
-      response += `- "시간창 제약 적용" → 고객 지정 시간대 준수\n`;
-    }
-    
-    if (timeConstraintData.hasWorkingHours) {
-      response += `- "근무시간 제약 적용" → 운전자 근무시간 준수\n`;
-    }
-    
-    response += `- "시간 제약 없이" → 순수 거리/비용 최적화\n\n`;
+    response += `💡 **목표를 선택하려면:**\n`;
+    response += `\`configure_problem\` 도구에 \`step: "objective"\`와 \`objective\` 값을 전달하세요.\n`;
+    response += `예: "비용 최소화로 목표 설정해줘"`;
+
+    return {
+      content: [{
+        type: 'text',
+        text: response
+      }]
+    };
   }
-  
-  response += `**3. 차량 용량 제약:**\n`;
-  response += `- "용량 제약 적용" → 차량 과적 방지 (안전)\n`;
-  response += `- "용량 제약 무시" → 최대 효율성 추구\n\n`;
-  
-  response += `**4. 특별한 요구사항이 있나요?**\n`;
-  response += `- 우선순위 고객 먼저 배송\n`;
-  response += `- 여러 창고 동시 사용\n`;
-  response += `- 정밀한 최적화 (시간 더 소요)\n\n`;
-  
-  response += `💡 **응답 예시:**\n`;
-  if (timeConstraintData.hasTimeWindows) {
-    response += `"비용 최소화로 설정하고, 시간창 제약과 용량 제약을 적용해줘"\n`;
-    response += `"거리 최소화로 하되, 시간 제약 없이 용량 제약만 적용해줘"\n`;
-  } else {
-    response += `"비용 최소화로 설정하고, 용량 제약을 적용해줘"\n`;
-    response += `"거리 최소화로 하되, 제약 없이 순수 최적화해줘"\n`;
+
+  // 목표 설정
+  const objectiveLabels = {
+    cost: '💰 비용 최소화',
+    time: '⏰ 시간 단축',
+    distance: '📏 거리 최소화',
+    satisfaction: '😊 고객 만족도 향상'
+  };
+
+  if (!session.config) {
+    session.config = {};
   }
+
+  session.config.objective = objective;
+  session.config.objective_label = objectiveLabels[objective as keyof typeof objectiveLabels];
+  session.config.set_at = new Date().toISOString();
+
+  await sessionManager.saveSession(session);
+
+  response += `✅ **목표 설정 완료**: ${objectiveLabels[objective as keyof typeof objectiveLabels]}\n\n`;
   
+  response += `🎯 **다음 단계:**\n`;
+  response += `**Option 1:** 제약 조건 검토 및 변경\n`;
+  response += `- \`configure_problem\` 도구에 \`step: "constraints"\` 전달\n`;
+  response += `- 예: "제약 조건을 검토해줘"\n\n`;
+  response += `**Option 2:** 고급 옵션 설정\n`;
+  response += `- \`configure_problem\` 도구에 \`step: "advanced"\` 전달\n`;
+  response += `- 예: "고급 옵션을 설정해줘"\n\n`;
+  response += `**Option 3:** 설정 확정하고 진행\n`;
+  response += `- \`configure_problem\` 도구에 \`step: "confirm"\` 전달`;
+
   return {
     content: [{
       type: 'text',
@@ -298,85 +327,249 @@ async function handleInteractiveConfiguration(sessionId: string): Promise<{ cont
   };
 }
 
-// 시간 제약조건 데이터 감지 함수
-async function detectTimeConstraints(session: any) {
-  let timeConstraintData = {
-    hasTimeWindows: false,
-    hasWorkingHours: false,
-    ordersWithTime: 0,
-    driversWithTime: 0
-  };
+// 3단계: 제약 조건 검토 및 사용자 선택적 변경
+async function handleConstraintConfigurationStep(session: any, constraintOverrides?: any): Promise<{ content: any[] }> {
+  let response = `⚙️ **3단계: 제약 조건 검토 및 변경**\n\n`;
+
+  const autoDetected = session.auto_detected_constraints || {};
   
-  if (session?.data_status?.drivers_loaded && session?.data_status?.orders_loaded) {
-    try {
-      const csvProcessor = await import('../utils/csv-processor.js');
-      const processor = new csvProcessor.CSVProcessor();
-      
-      const driversResult = await processor.readDrivers();
-      const ordersResult = await processor.readOrders();
-      
-      const drivers = driversResult.data;
-      const orders = ordersResult.data;
-      
-      timeConstraintData.hasTimeWindows = orders.some(order => order.time_window_start && order.time_window_end);
-      timeConstraintData.hasWorkingHours = drivers.some(driver => driver.working_hours_start || driver.working_hours_end);
-      timeConstraintData.ordersWithTime = orders.filter(order => order.time_window_start && order.time_window_end).length;
-      timeConstraintData.driversWithTime = drivers.filter(driver => driver.working_hours_start || driver.working_hours_end).length;
-      
-    } catch (error) {
-      console.warn('시간 제약조건 감지 실패:', error);
-    }
+  if (!constraintOverrides) {
+    // 현재 상태 표시
+    response += `🤖 **현재 자동 감지된 제약 조건:**\n\n`;
+    response += `🚛 차량 용량 제약: ${autoDetected.vehicle_capacity ? '✅ 활성화' : '❌ 비활성화'}\n`;
+    response += `⏰ 시간창 제약: ${autoDetected.time_windows ? '✅ 활성화' : '❌ 비활성화'}\n`;
+    response += `👨‍💼 근무시간 제약: ${autoDetected.working_hours ? '✅ 활성화' : '❌ 비활성화'}\n\n`;
+    
+    response += `🔧 **제약 조건을 변경하고 싶다면:**\n\n`;
+    response += `**용량 제약 변경:**\n`;
+    response += `- \`constraint_overrides: { "vehicle_capacity": true/false }\`\n`;
+    response += `- 예: "용량 제약을 강제로 활성화해줘"\n\n`;
+    
+    response += `**시간창 제약 변경:**\n`;
+    response += `- \`constraint_overrides: { "time_windows": true/false }\`\n`;
+    response += `- 예: "시간창 제약을 비활성화해줘"\n\n`;
+    
+    response += `**근무시간 제약 변경:**\n`;
+    response += `- \`constraint_overrides: { "working_hours": true/false }\`\n`;
+    response += `- 예: "근무시간 제약을 활성화해줘"\n\n`;
+    
+    response += `**차량 수 제한:**\n`;
+    response += `- \`constraint_overrides: { "max_vehicles": 숫자 }\`\n`;
+    response += `- 예: "최대 차량 수를 5대로 제한해줘"\n\n`;
+    
+    response += `⚠️ **중요**: 변경하지 않으면 자동 감지된 설정이 유지됩니다.\n`;
+    response += `💡 **현재 설정으로 진행하려면**: "설정을 확정해줘" 또는 \`step: "confirm"\``;
+
+    return {
+      content: [{
+        type: 'text',
+        text: response
+      }]
+    };
   }
+
+  // 사용자 변경사항 적용
+  if (!session.config) {
+    session.config = {};
+  }
+
+  const finalConstraints = {
+    vehicle_capacity: constraintOverrides.vehicle_capacity !== undefined ? 
+      constraintOverrides.vehicle_capacity : autoDetected.vehicle_capacity,
+    time_windows: constraintOverrides.time_windows !== undefined ? 
+      constraintOverrides.time_windows : autoDetected.time_windows,
+    working_hours: constraintOverrides.working_hours !== undefined ? 
+      constraintOverrides.working_hours : autoDetected.working_hours,
+    max_vehicles: constraintOverrides.max_vehicles || null
+  };
+
+  session.config.constraints = finalConstraints;
+  session.config.constraint_overrides = constraintOverrides;
+  session.config.constraints_set_at = new Date().toISOString();
+
+  await sessionManager.saveSession(session);
+
+  response += `✅ **제약 조건 설정 완료**\n\n`;
+  response += `📋 **최종 제약 조건:**\n`;
+  response += `🚛 차량 용량 제약: ${finalConstraints.vehicle_capacity ? '✅ 활성화' : '❌ 비활성화'}`;
+  if (constraintOverrides.vehicle_capacity !== undefined) {
+    response += ` (사용자 변경)`;
+  }
+  response += '\n';
   
-  return timeConstraintData;
+  response += `⏰ 시간창 제약: ${finalConstraints.time_windows ? '✅ 활성화' : '❌ 비활성화'}`;
+  if (constraintOverrides.time_windows !== undefined) {
+    response += ` (사용자 변경)`;
+  }
+  response += '\n';
+  
+  response += `👨‍💼 근무시간 제약: ${finalConstraints.working_hours ? '✅ 활성화' : '❌ 비활성화'}`;
+  if (constraintOverrides.working_hours !== undefined) {
+    response += ` (사용자 변경)`;
+  }
+  response += '\n';
+
+  if (finalConstraints.max_vehicles) {
+    response += `🚐 최대 차량 수: ${finalConstraints.max_vehicles}대\n`;
+  }
+
+  response += `\n🎯 **다음 단계:**\n`;
+  response += `**Option 1:** 고급 옵션 설정\n`;
+  response += `- \`step: "advanced"\` 전달\n\n`;
+  response += `**Option 2:** 설정 확정하고 진행\n`;
+  response += `- \`step: "confirm"\` 전달`;
+
+  return {
+    content: [{
+      type: 'text',
+      text: response
+    }]
+  };
 }
 
-// 최적화 설정 구성
-async function buildOptimizationConfig(
-  objective: string | undefined,
-  constraints: any,
-  advancedOptions: any,
-  businessRules: any,
-  session: any
-): Promise<OptimizationConfig> {
-  
-  // 데이터 기반 제약조건 감지 (정보 수집만, 자동 적용 안 함)
-  let timeConstraintData = await detectTimeConstraints(session);
-  
-  // 기본값 설정 (모든 제약조건을 false로 시작)
-  const config: OptimizationConfig = {
-    objective: (objective as any) || 'distance',
-    constraints: {
-      vehicle_capacity: constraints?.vehicle_capacity ?? false,  // 기본값: false
-      time_windows: constraints?.time_windows ?? false,          // 기본값: false
-      working_hours: constraints?.working_hours ?? false,        // 기본값: false
-      max_vehicles: constraints?.max_vehicles
-    },
-    advanced_options: {
-      multi_depot: advancedOptions?.multi_depot ?? false,
-      priority_delivery: advancedOptions?.priority_delivery ?? true,
-      optimization_intensity: advancedOptions?.optimization_intensity || 'balanced'
-    },
-    business_rules: businessRules || {}
-  };
+// 4단계: 고급 옵션 설정
+async function handleAdvancedOptionsStep(session: any, advancedOptions?: any): Promise<{ content: any[] }> {
+  let response = `⚡ **4단계: 고급 옵션 설정**\n\n`;
 
-  // 데이터 기반 자동 조정
-  if (session.data_status.drivers_loaded && session.data_status.orders_loaded) {
-    // 실제 데이터 개수에 따른 자동 조정 로직
-    // (여기서는 시뮬레이션)
+  if (!advancedOptions) {
+    response += `🔧 **사용 가능한 고급 옵션:**\n\n`;
     
-    if (!config.constraints.max_vehicles) {
-      // 주문 수 기반으로 최대 차량 수 제안
-      config.constraints.max_vehicles = Math.min(10, Math.ceil(5 / 3)); // 가상의 계산
-    }
+    response += `🚀 **최적화 강도** (optimization_intensity):\n`;
+    response += `- \`fast\`: 30초, 빠른 결과\n`;
+    response += `- \`balanced\`: 60초, 균형잡힌 품질 (기본값)\n`;
+    response += `- \`thorough\`: 120초, 최고 품질\n\n`;
+    
+    response += `📐 **거리 계산 방식** (distance_type):\n`;
+    response += `- \`euclidean\`: 직선 거리 (기본값, 빠름)\n`;
+    response += `- \`manhattan\`: 맨하탄 거리\n`;
+    response += `- \`osrm\`: 실제 도로 거리 (정확하지만 느림)\n\n`;
+    
+    response += `📦 **미할당 허용** (allow_unassigned):\n`;
+    response += `- \`true\`: 배송 불가능한 주문 허용 (기본값)\n`;
+    response += `- \`false\`: 모든 주문 강제 배송\n\n`;
+    
+    response += `💡 **고급 옵션을 설정하려면:**\n`;
+    response += `\`advanced_options\` 객체에 원하는 설정을 전달하세요.\n`;
+    response += `예: "정밀 최적화로 설정해줘" → \`{ "optimization_intensity": "thorough" }\`\n\n`;
+    response += `**기본값으로 진행하려면**: "설정을 확정해줘"`;
+
+    return {
+      content: [{
+        type: 'text',
+        text: response
+      }]
+    };
   }
 
-  return config;
+  // 고급 옵션 설정
+  if (!session.config) {
+    session.config = {};
+  }
+
+  const finalAdvancedOptions = {
+    multi_depot: false, // 기본값
+    priority_delivery: true, // 기본값
+    optimization_intensity: advancedOptions.optimization_intensity || 'balanced',
+    distance_type: advancedOptions.distance_type || 'euclidean',
+    allow_unassigned: advancedOptions.allow_unassigned !== undefined ? 
+      advancedOptions.allow_unassigned : true
+  };
+
+  session.config.advanced_options = finalAdvancedOptions;
+  session.config.advanced_options_set_at = new Date().toISOString();
+
+  await sessionManager.saveSession(session);
+
+  response += `✅ **고급 옵션 설정 완료**\n\n`;
+  response += `📋 **최종 고급 옵션:**\n`;
+  response += `🚀 최적화 강도: ${finalAdvancedOptions.optimization_intensity}\n`;
+  response += `📐 거리 계산: ${finalAdvancedOptions.distance_type}\n`;
+  response += `📦 미할당 허용: ${finalAdvancedOptions.allow_unassigned ? '✅ 허용' : '❌ 불허'}\n\n`;
+  
+  response += `🎯 **다음 단계:**\n`;
+  response += `**설정 확정하고 진행**: \`step: "confirm"\` 전달`;
+
+  return {
+    content: [{
+      type: 'text',
+      text: response
+    }]
+  };
+}
+
+// 5단계: 설정 확정
+async function handleConfirmationStep(session: any): Promise<{ content: any[] }> {
+  let response = `✅ **5단계: 설정 확정**\n\n`;
+
+  if (!session.config || !session.config.objective) {
+    response += `❌ **설정 누락**: 최적화 목표가 설정되지 않았습니다.\n\n`;
+    response += `🔧 **해결 방법:**\n`;
+    response += `1. \`step: "objective"\`로 목표를 먼저 선택해주세요\n`;
+    response += `2. 예: "비용 최소화로 목표 설정해줘"`;
+
+    return {
+      content: [{
+        type: 'text',
+        text: response
+      }]
+    };
+  }
+
+  // 최종 설정 구성
+  const autoDetected = session.auto_detected_constraints || {};
+  const finalConfig: OptimizationConfig = {
+    objective: session.config.objective,
+    constraints: {
+      vehicle_capacity: session.config.constraints?.vehicle_capacity !== undefined ? 
+        session.config.constraints.vehicle_capacity : autoDetected.vehicle_capacity || false,
+      time_windows: session.config.constraints?.time_windows !== undefined ? 
+        session.config.constraints.time_windows : autoDetected.time_windows || false,
+      working_hours: session.config.constraints?.working_hours !== undefined ? 
+        session.config.constraints.working_hours : autoDetected.working_hours || false,
+      max_vehicles: session.config.constraints?.max_vehicles || null
+    },
+    advanced_options: {
+      multi_depot: false, // 기본값
+      priority_delivery: true, // 기본값
+      optimization_intensity: session.config.advanced_options?.optimization_intensity || 'balanced',
+      distance_type: session.config.advanced_options?.distance_type || 'euclidean',
+      allow_unassigned: session.config.advanced_options?.allow_unassigned !== undefined ? 
+        session.config.advanced_options.allow_unassigned : true
+    },
+    _metadata: {
+      auto_detected_constraints: autoDetected,
+      user_overrides: session.config.constraint_overrides || {},
+      configured_at: new Date().toISOString(),
+      ai_constraint_changes_forbidden: true
+    }
+  };
+
+  // 세션에 최종 설정 저장
+  session.config = finalConfig;
+  await sessionManager.saveSession(session);
+  await sessionManager.completeStep(session.id, 'configure_problem');
+
+  // 설정 요약 생성
+  response += generateConfigurationSummary(finalConfig);
+  
+  response += `\n🎯 **다음 작업:**\n`;
+  response += `**Option 1:** 최적화 실행\n`;
+  response += `- "최적화를 실행해줘" 또는 \`solve_optimization\` 도구 사용\n\n`;
+  response += `**Option 2:** 설정 수정\n`;
+  response += `- \`configure_problem\` 도구로 다시 설정 변경\n\n`;
+  response += `⚠️ **중요 원칙**: AI는 절대로 이 설정을 임의로 변경하지 않습니다. 모든 변경은 사용자의 명시적 지시에서만 가능합니다.`;
+
+  return {
+    content: [{
+      type: 'text',
+      text: response
+    }]
+  };
 }
 
 // 설정 요약 생성
-function generateConfigSummary(config: OptimizationConfig): string {
-  let summary = `📋 **설정 요약:**\n\n`;
+function generateConfigurationSummary(config: OptimizationConfig): string {
+  let summary = `📋 **최종 설정 요약:**\n\n`;
   
   // 목표
   const objectiveLabels = {
@@ -385,142 +578,30 @@ function generateConfigSummary(config: OptimizationConfig): string {
     distance: '📏 거리 최소화',
     satisfaction: '😊 고객 만족도 향상'
   };
+  summary += `🎯 **최적화 목표**: ${objectiveLabels[config.objective as keyof typeof objectiveLabels]}\n\n`;
   
-  summary += `🎯 **주요 목표:** ${objectiveLabels[config.objective]}\n\n`;
-  
-  // 제약조건
-  summary += `🔒 **제약조건:**\n`;
-  summary += `- 차량 용량 제약: ${config.constraints.vehicle_capacity ? '✅ 적용' : '❌ 무시'}\n`;
-  summary += `- 시간창 제약: ${config.constraints.time_windows ? '✅ 적용' : '❌ 무시'}\n`;
-  summary += `- 근무시간 제약: ${config.constraints.working_hours ? '✅ 적용' : '❌ 무시'}\n`;
-  
+  // 제약 조건
+  summary += `⚙️ **제약 조건:**\n`;
+  summary += `- 🚛 차량 용량 제약: ${config.constraints.vehicle_capacity ? '✅ 활성화' : '❌ 비활성화'}\n`;
+  summary += `- ⏰ 시간창 제약: ${config.constraints.time_windows ? '✅ 활성화' : '❌ 비활성화'}\n`;
+  summary += `- 👨‍💼 근무시간 제약: ${config.constraints.working_hours ? '✅ 활성화' : '❌ 비활성화'}\n`;
   if (config.constraints.max_vehicles) {
-    summary += `- 최대 차량 수: ${config.constraints.max_vehicles}대\n`;
+    summary += `- 🚐 최대 차량 수: ${config.constraints.max_vehicles}대\n`;
   }
-  summary += '\n';
   
   // 고급 옵션
-  summary += `⚡ **고급 옵션:**\n`;
-  summary += `- 다중 창고: ${config.advanced_options.multi_depot ? '✅ 활성화' : '❌ 비활성화'}\n`;
-  summary += `- 우선순위 배송: ${config.advanced_options.priority_delivery ? '✅ 활성화' : '❌ 비활성화'}\n`;
+  summary += `\n⚡ **고급 옵션:**\n`;
+  summary += `- 🚀 최적화 강도: ${config.advanced_options.optimization_intensity}\n`;
+  summary += `- 📐 거리 계산: ${config.advanced_options.distance_type}\n`;
+  summary += `- 📦 미할당 허용: ${config.advanced_options.allow_unassigned ? '✅ 허용' : '❌ 불허'}\n`;
   
-  const intensityLabels = {
-    fast: '🚀 빠른 처리',
-    balanced: '⚖️ 균형',
-    thorough: '🔬 정밀 분석'
-  };
-  summary += `- 최적화 강도: ${intensityLabels[config.advanced_options.optimization_intensity]}\n\n`;
-  
-  // 비즈니스 규칙
-  if (Object.keys(config.business_rules || {}).length > 0) {
-    summary += `📊 **비즈니스 규칙:**\n`;
-    
-    if (config.business_rules?.break_duration) {
-      summary += `- 휴식 시간: ${config.business_rules.break_duration}분\n`;
-    }
-    
-    if (config.business_rules?.max_working_hours) {
-      summary += `- 최대 근무시간: ${config.business_rules.max_working_hours}시간\n`;
-    }
-    
-    if (config.business_rules?.fuel_cost_per_km) {
-      summary += `- km당 연료비: ${config.business_rules.fuel_cost_per_km}원\n`;
-    }
-    summary += '\n';
+  // 메타데이터
+  if (config._metadata?.user_overrides && Object.keys(config._metadata.user_overrides).length > 0) {
+    summary += `\n🔧 **사용자 변경사항:**\n`;
+    Object.entries(config._metadata.user_overrides).forEach(([key, value]) => {
+      summary += `- ${key}: ${value}\n`;
+    });
   }
-  
+
   return summary;
-}
-
-// 비즈니스 영향 분석
-function analyzeBusinessImpact(config: OptimizationConfig, session: any): string {
-  let analysis = `💼 **예상 비즈니스 영향:**\n\n`;
-  
-  // 목표별 예상 효과
-  switch (config.objective) {
-    case 'cost':
-      analysis += `💰 **비용 최소화 효과:**\n`;
-      analysis += `- 연료비 10-20% 절감 예상\n`;
-      analysis += `- 운전자 초과근무 감소\n`;
-      analysis += `- 차량 활용도 극대화\n\n`;
-      break;
-      
-    case 'time':
-      analysis += `⏰ **시간 단축 효과:**\n`;
-      analysis += `- 평균 배송 시간 15-25% 단축\n`;
-      analysis += `- 고객 대기시간 감소\n`;
-      analysis += `- 같은 시간에 더 많은 배송 가능\n\n`;
-      break;
-      
-    case 'distance':
-      analysis += `📏 **거리 최소화 효과:**\n`;
-      analysis += `- 총 이동거리 20-30% 감소\n`;
-      analysis += `- 차량 마모 감소\n`;
-      analysis += `- 환경 친화적 운송\n\n`;
-      break;
-      
-    case 'satisfaction':
-      analysis += `😊 **고객 만족도 향상:**\n`;
-      analysis += `- 정시 배송률 향상\n`;
-      analysis += `- 배송 예측 정확도 증가\n`;
-      analysis += `- 고객 불만 감소\n\n`;
-      break;
-  }
-  
-  // 제약조건 영향
-  analysis += `⚖️ **제약조건 영향:**\n`;
-  
-  if (config.constraints.vehicle_capacity) {
-    analysis += `- ✅ 차량 과적 방지로 안전성 확보\n`;
-  } else {
-    analysis += `- ⚠️ 차량 용량 초과 위험 (비용 절감 우선)\n`;
-  }
-  
-  if (config.constraints.time_windows) {
-    analysis += `- ✅ 고객 약속 시간 준수로 신뢰도 향상\n`;
-  } else {
-    analysis += `- ⚠️ 고객 시간 요청 무시 (효율성 우선)\n`;
-  }
-  
-  if (config.constraints.working_hours) {
-    analysis += `- ✅ 근로자 권익 보호 및 법규 준수\n`;
-  } else {
-    analysis += `- ⚠️ 운전자 과로 위험 (생산성 우선)\n`;
-  }
-  
-  analysis += '\n';
-  
-  // 최적화 강도별 예상 시간
-  const timeEstimates = {
-    fast: '30초-2분',
-    balanced: '1-5분',
-    thorough: '3-10분'
-  };
-  
-  analysis += `⏱️ **예상 최적화 시간:** ${timeEstimates[config.advanced_options.optimization_intensity]}\n\n`;
-  
-  // 권장사항
-  analysis += `💡 **권장사항:**\n`;
-  
-  if (config.objective === 'cost' && config.constraints.time_windows) {
-    analysis += `- 시간창 제약으로 인해 비용 절감 효과가 제한될 수 있습니다\n`;
-  }
-  
-  if (config.advanced_options.optimization_intensity === 'fast' && config.objective === 'satisfaction') {
-    analysis += `- 고객 만족도 향상이 목표라면 'balanced' 이상 강도를 권장합니다\n`;
-  }
-  
-  analysis += `- 첫 실행 후 결과를 보고 \`refine_solution\`으로 세부 조정하세요\n`;
-  
-  return analysis;
-}
-
-// 설정 템플릿 생성 (향후 재사용)
-export function createConfigTemplate(config: OptimizationConfig, templateName: string): any {
-  return {
-    name: templateName,
-    config: config,
-    created_at: new Date().toISOString(),
-    description: `${config.objective} 최적화 템플릿`
-  };
 } 

@@ -1,0 +1,4 @@
+driver_id,name,start_location_lat,start_location_lng,capacity,vehicle_type,visit_preference_1,visit_preference_2,visit_preference_3,visit_preference_4
+전문배송A,전문배송A,37.5636,126.9834,700,car,1,2,3,4
+일반배송B,일반배송B,37.5636,126.9834,500,car,2,3,1,4
+고급배송C,고급배송C,37.5636,126.9834,1200,car,4,3,2,1 

@@ -1,4 +1,0 @@
-driver_id,name,start_location_lat,start_location_lng,end_location_lat,end_location_lng,capacity,working_hours_start,working_hours_end,cost_per_km
-D001,김민수,37.5665,126.978,37.5665,126.978,1000,09:00,18:00,500
-D002,이영희,37.5505,126.9882,37.5505,126.9882,1500,08:00,17:00,550
-D003,박철수,37.5642,126.9734,37.5642,126.9734,2000,10:00,19:00,480

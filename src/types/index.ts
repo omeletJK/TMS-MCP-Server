@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 // ===== CSV 스키마 정의 =====
 
-// 운전자 CSV 스키마
+// 운전자 CSV 스키마 (예제 케이스들 지원)
 export const DriverSchema = z.object({
   driver_id: z.string(),
   name: z.string().optional(),
@@ -14,9 +14,22 @@ export const DriverSchema = z.object({
   working_hours_start: z.string().optional(),
   working_hours_end: z.string().optional(),
   cost_per_km: z.number().optional(),
+  
+  // 예제 케이스 추가 필드들
+  vehicle_type: z.string().optional(), // car, bike, walk 등
+  volume_capacity: z.number().optional(),
+  fixed_cost: z.number().optional(),
+  unit_distance_cost: z.number().optional(),
+  unit_duration_cost: z.number().optional(),
+  
+  // 선호도 케이스 (case_5)
+  visit_preference_1: z.number().optional(),
+  visit_preference_2: z.number().optional(),
+  visit_preference_3: z.number().optional(),
+  visit_preference_4: z.number().optional(),
 });
 
-// 주문 CSV 스키마
+// 주문 CSV 스키마 (예제 케이스들 지원)
 export const OrderSchema = z.object({
   order_id: z.string(),
   customer_name: z.string().optional(),
@@ -29,9 +42,13 @@ export const OrderSchema = z.object({
   time_window_start: z.string().optional(),
   time_window_end: z.string().optional(),
   priority: z.number().optional(),
+  
+  // 예제 케이스 추가 필드들
+  address: z.string().optional(), // 주소 정보
+  service_time: z.number().optional(), // 서비스 시간 (분)
 });
 
-// 창고 CSV 스키마
+// 창고 CSV 스키마 (예제 케이스들 지원)
 export const DepotSchema = z.object({
   depot_id: z.string(),
   name: z.string().optional(),
@@ -40,6 +57,9 @@ export const DepotSchema = z.object({
   capacity: z.number().optional(),
   operating_hours_start: z.string().optional(),
   operating_hours_end: z.string().optional(),
+  
+  // 예제 케이스 추가 필드들
+  address: z.string().optional(), // 주소 정보
 });
 
 export type Driver = z.infer<typeof DriverSchema>;
@@ -191,11 +211,26 @@ export interface OptimizationConfig {
     multi_depot: boolean;
     priority_delivery: boolean;
     optimization_intensity: 'fast' | 'balanced' | 'thorough';
+    distance_type?: 'euclidean' | 'manhattan' | 'osrm';
+    allow_unassigned?: boolean;
   };
   business_rules?: {
     break_duration?: number;
     max_working_hours?: number;
     fuel_cost_per_km?: number;
+  };
+  // 물리적 제약조건 메타데이터 (변경 불가 표시)
+  _immutable_constraints?: {
+    vehicle_capacity?: string | null;
+    time_windows?: string | null;
+    working_hours?: string | null;
+  };
+  // 설정 메타데이터
+  _metadata?: {
+    auto_detected_constraints?: any;
+    user_overrides?: any;
+    configured_at?: string;
+    ai_constraint_changes_forbidden?: boolean;
   };
 }
 

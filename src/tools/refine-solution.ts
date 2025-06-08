@@ -306,13 +306,25 @@ function summarizeCurrentState(result: any): string {
 function adjustConfiguration(originalConfig: any, analysis: any, preserveConstraints: boolean): any {
   const adjustedConfig = JSON.parse(JSON.stringify(originalConfig || {}));
   
+  // 물리적 제약조건 보호: 불변 제약조건은 절대 변경하지 않음
+  const immutableConstraints = originalConfig?._immutable_constraints || {};
+  
   // 목표 함수 조정
   switch (analysis.objective) {
     case '완료율 향상':
       // 제약조건 완화로 더 많은 할당 시도
       if (!preserveConstraints) {
-        adjustedConfig.constraints.vehicle_capacity = false;
-        adjustedConfig.constraints.time_windows = false;
+        // 물리적 제약조건이 아닌 경우에만 완화 가능
+        if (!immutableConstraints.vehicle_capacity) {
+          adjustedConfig.constraints.vehicle_capacity = false;
+        } else {
+          console.warn('🚫 용량 제약조건은 물리적 한계로 인해 비활성화할 수 없습니다.');
+          console.warn('🔒 사용자 명시적 허락 없이 이 제약조건을 변경하지 않습니다.');
+        }
+        
+        if (!immutableConstraints.time_windows) {
+          adjustedConfig.constraints.time_windows = false;
+        }
       }
       adjustedConfig.advanced_options.optimization_intensity = 'thorough';
       break;

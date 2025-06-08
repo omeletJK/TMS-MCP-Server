@@ -1,0 +1,3 @@
+driver_id,name,start_location_lat,start_location_lng,capacity,vehicle_type
+아침배송,아침배송,37.5172,127.0473,600,car
+오후배송,오후배송,37.5172,127.0473,800,car 

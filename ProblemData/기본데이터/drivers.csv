@@ -1,0 +1,4 @@
+driver_id,name,start_location_lat,start_location_lng,capacity,vehicle_type,fixed_cost,unit_distance_cost,unit_duration_cost
+대형트럭,대형트럭,37.4763,126.8836,1500,car,50000,100,50
+중형트럭,중형트럭,37.4763,126.8836,1000,car,30000,80,30
+소형밴,소형밴,37.4763,126.8836,500,car,15000,60,20

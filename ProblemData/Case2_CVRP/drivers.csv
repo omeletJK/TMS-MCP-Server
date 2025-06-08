@@ -1,0 +1,4 @@
+driver_id,name,start_location_lat,start_location_lng,capacity,vehicle_type
+트럭1호,트럭1호,37.4138,127.1026,1000,car
+트럭2호,트럭2호,37.4138,127.1026,800,car
+밴1호,밴1호,37.4138,127.1026,500,car 
