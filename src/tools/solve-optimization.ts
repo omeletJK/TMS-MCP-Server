@@ -124,7 +124,7 @@ export async function handleSolveOptimization(args: any): Promise<{ content: any
       enableCapacityConstraint: session.config?.constraints?.vehicle_capacity ?? false,
       enableTimeWindowConstraint: session.config?.constraints?.time_windows ?? false,
       allowUnassignedVisits: custom_options.allow_unassigned_visits, // API 클라이언트에서 자동 설정
-      distanceType: 'euclidean' as const,
+      distanceType: session.config?.advanced_options?.distance_type || 'euclidean',
       deliveryStartTime: new Date().toISOString()
     };
 
@@ -135,11 +135,25 @@ export async function handleSolveOptimization(args: any): Promise<{ content: any
       optimizationOptions
     );
 
+    // 🔍 요청 내용 디버깅
+    console.error(`🔧 API 요청 옵션:`, JSON.stringify(omeletRequest.option, null, 2));
+    console.error(`📐 거리 계산 방식: ${optimizationOptions.distanceType}`);
+    
+    if (optimizationOptions.distanceType === 'osrm') {
+      console.error(`⚠️ OSRM 모드: 실제 도로 거리 계산 중...`);
+      console.error(`⏱️ 예상 시간: euclidean보다 2-3배 더 오래 걸릴 수 있습니다`);
+    } else if (optimizationOptions.distanceType === 'euclidean') {
+      console.error(`📏 유클리디언 모드: 직선 거리 계산 중...`);
+    } else if (optimizationOptions.distanceType === 'manhattan') {
+      console.error(`🏙️ 맨해튼 모드: 격자 거리 계산 중...`);
+    }
+
     // 7. 최적화 실행
     response += `🚀 **최적화 실행 시작...**\n`;
     response += `- 방문지: ${omeletRequest.visits.length}개\n`;
     response += `- 차량: ${omeletRequest.vehicles.length}대\n`;
-    response += `- 시간 제한: ${optimizationOptions.timeLimit}초\n\n`;
+    response += `- 시간 제한: ${optimizationOptions.timeLimit}초\n`;
+    response += `- 거리 계산: ${optimizationOptions.distanceType === 'osrm' ? '🛣️ OSRM (도로 기반)' : optimizationOptions.distanceType === 'euclidean' ? '📏 유클리디언 (직선)' : '🏙️ 맨해튼 (격자)'}\n\n`;
 
     if (custom_options.enable_debug) {
               console.error('OMELET Request:', JSON.stringify(omeletRequest, null, 2));

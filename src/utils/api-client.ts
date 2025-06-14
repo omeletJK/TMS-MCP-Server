@@ -106,8 +106,12 @@ export class OmeletAPIClient {
   async optimizeRoutes(request: OmeletRequest): Promise<ProcessedOmeletResponse> {
     try {
       console.error(`🧮 VRP 최적화 요청 - 주문: ${request.visits.length}개, 차량: ${request.vehicles.length}대`);
+      console.error(`📐 거리 계산 방식: ${request.option?.distance_type || 'euclidean'}`);
 
       const response: AxiosResponse<OmeletResponse> = await this.client.post('/api/vrp', request);
+      
+      console.error(`📊 최적화 결과: ${response.data.status}`);
+      console.error(`📏 총 거리: ${response.data.routing_engine_result?.solution_cost_details?.total_distance_cost || 'N/A'}`);
       
       if (response.data.status === 'infeasible') {
         throw new TMSError(

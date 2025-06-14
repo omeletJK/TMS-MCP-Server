@@ -26,8 +26,8 @@ export const configureProblemTool: Tool = {
     properties: {
       step: {
         type: 'string',
-        enum: ['analyze', 'objective', 'constraints', 'advanced', 'confirm'],
-        description: '설정 단계: analyze(데이터분석), objective(목표선택), constraints(제약변경), advanced(고급옵션), confirm(확정)',
+        enum: ['analyze', 'objective', 'constraints', 'distance', 'advanced', 'confirm'],
+        description: '설정 단계: analyze(데이터분석), objective(목표선택), constraints(제약변경), distance(거리계산방식), advanced(고급옵션), confirm(확정)',
         default: 'analyze'
       },
       objective: {
@@ -56,6 +56,12 @@ export const configureProblemTool: Tool = {
           }
         }
       },
+      distance_type: {
+        type: 'string',
+        enum: ['euclidean', 'manhattan', 'osrm'],
+        description: '거리 계산 방식: euclidean(직선거리), manhattan(맨하탄), osrm(실제도로)',
+        default: 'euclidean'
+      },
       advanced_options: {
         type: 'object',
         properties: {
@@ -64,12 +70,6 @@ export const configureProblemTool: Tool = {
             enum: ['fast', 'balanced', 'thorough'],
             description: '최적화 강도: fast(30초), balanced(60초), thorough(120초)',
             default: 'balanced'
-          },
-          distance_type: {
-            type: 'string',
-            enum: ['euclidean', 'manhattan', 'osrm'],
-            description: '거리 계산 방식: euclidean(직선거리), manhattan(맨하탄), osrm(실제도로)',
-            default: 'euclidean'
           },
           allow_unassigned: {
             type: 'boolean',
@@ -84,74 +84,55 @@ export const configureProblemTool: Tool = {
 };
 
 export async function handleConfigureProblem(args: any): Promise<{ content: any[] }> {
+  // 세션 ID 검증 제거 - getActiveSession() 사용
+
+  const session = await sessionManager.getActiveSession();
+  if (!session) {
+    return {
+      content: [{
+        type: 'text',
+        text: `❌ 활성 프로젝트가 없습니다. 먼저 프로젝트를 시작해주세요.`
+      }]
+    };
+  }
+
+  const step = args.step || 'start';
+
   try {
-    const { 
-      step = 'analyze',
-      objective, 
-      constraint_overrides,
-      advanced_options
-    } = args;
-
-    // 1. 활성 세션 가져오기
-    const session = await sessionManager.getActiveSession();
-    if (!session) {
-      return {
-        content: [{
-          type: 'text',
-          text: `❌ **활성 프로젝트가 없습니다**\n\n` +
-                `🔧 **해결 방법:**\n` +
-                `1. \`start_project\` 도구로 새 프로젝트를 시작하세요\n` +
-                `2. \`prepare_data\` 도구로 데이터를 먼저 준비하세요`
-        }]
-      };
-    }
-
-    // 2. 데이터 검증 상태 확인
-    if (!session.data_status.validation_passed) {
-      return {
-        content: [{
-          type: 'text',
-          text: `⚠️ **데이터 검증이 완료되지 않았습니다**\n\n` +
-                `먼저 \`prepare_data\` 도구를 실행하여 데이터를 검증해주세요.\n\n` +
-                `💡 **명령어 예시:**\n` +
-                `"데이터를 분석하고 검증해줘"`
-        }]
-      };
-    }
-
-    // 3. 단계별 처리
     switch (step) {
+      case 'start':
       case 'analyze':
         return await handleDataAnalysisStep(session);
       
       case 'objective':
-        return await handleObjectiveSelectionStep(session, objective);
+        return await handleObjectiveSelectionStep(session, args.objective);
       
       case 'constraints':
-        return await handleConstraintConfigurationStep(session, constraint_overrides);
+        return await handleConstraintConfigurationStep(session, args.constraint_overrides);
+      
+      case 'distance':
+        return await handleDistanceMethodStep(session, args.distance_type);
       
       case 'advanced':
-        return await handleAdvancedOptionsStep(session, advanced_options);
+        return await handleAdvancedOptionsStep(session, args.advanced_options);
       
       case 'confirm':
         return await handleConfirmationStep(session);
       
       default:
-        return await handleDataAnalysisStep(session);
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ 알 수 없는 단계: ${step}. 유효한 단계: start, objective, constraints, distance, advanced, confirm`
+          }]
+        };
     }
-
   } catch (error) {
-    console.error('Configure problem error:', error);
-    
+    console.error('Configure problem 오류:', error);
     return {
       content: [{
         type: 'text',
-        text: `❌ **최적화 설정 중 오류가 발생했습니다**\n\n` +
-              `오류 내용: ${error instanceof Error ? error.message : '알 수 없는 오류'}\n\n` +
-              `🔧 **해결 방법:**\n` +
-              `1. 세션 ID가 올바른지 확인해주세요\n` +
-              `2. 이전 단계들이 완료되었는지 확인해주세요\n` +
-              `3. 다시 시도해보세요`
+        text: `❌ 설정 중 오류 발생: ${error instanceof Error ? error.message : String(error)}`
       }]
     };
   }
@@ -414,6 +395,94 @@ async function handleConstraintConfigurationStep(session: any, constraintOverrid
   }
 
   response += `\n🎯 **다음 단계:**\n`;
+  response += `**Option 1:** 거리 계산 방식 선택\n`;
+  response += `- \`step: "distance"\` 전달\n\n`;
+  response += `**Option 2:** 고급 옵션 설정\n`;
+  response += `- \`step: "advanced"\` 전달\n\n`;
+  response += `**Option 3:** 설정 확정하고 진행\n`;
+  response += `- \`step: "confirm"\` 전달`;
+
+  return {
+    content: [{
+      type: 'text',
+      text: response
+    }]
+  };
+}
+
+// 4단계: 거리 계산 방식 선택
+async function handleDistanceMethodStep(session: any, distanceType?: string): Promise<{ content: any[] }> {
+  let response = `⚡ **4단계: 거리 계산 방식 선택**\n\n`;
+
+  if (!distanceType) {
+    response += `📐 **거리 계산 방식 선택:**\n\n`;
+    
+    response += `🏃‍‍♂️ **euclidean (기본값, 추천)**\n`;
+    response += `   ✅ 직선 거리 계산\n`;
+    response += `   ✅ 빠른 연산 속도 (대용량 데이터 처리 가능)\n`;
+    response += `   ✅ 안정적인 결과\n`;
+    response += `   ❌ 실제 도로와 다를 수 있음\n\n`;
+    
+    response += `🚗 **osrm (정확한 도로 거리)**\n`;
+    response += `   ✅ 실제 도로 네트워크 기반 거리\n`;
+    response += `   ✅ 가장 정확한 거리 계산\n`;
+    response += `   ✅ 실제 운송비/시간과 일치\n`;
+    response += `   ❌ 연산 시간이 오래 걸림 (소규모 데이터 권장)\n`;
+    response += `   ❌ 네트워크 의존성\n\n`;
+    
+    response += `📱 **manhattan (격자형 거리)**\n`;
+    response += `   ✅ 도시 내 격자형 도로에 적합\n`;
+    response += `   ❌ 일반적인 배송에는 부적합\n\n`;
+    
+    response += `💡 **선택 가이드:**\n`;
+    response += `- 🏃‍♂️ **빠른 최적화가 필요하다면**: euclidean\n`;
+    response += `- 🚗 **정확한 거리가 중요하다면**: osrm\n`;
+    response += `- 📊 **주문 수가 50개 이상이라면**: euclidean 권장\n`;
+    response += `- 🎯 **주문 수가 20개 이하라면**: osrm 고려\n\n`;
+    
+    response += `🔧 **선택 방법:**\n`;
+    response += `"euclidean으로 설정해줘" 또는 "osrm으로 설정해줘"\n\n`;
+    response += `**기본값으로 진행**: "기본값으로 진행해줘"`;
+
+    return {
+      content: [{
+        type: 'text',
+        text: response
+      }]
+    };
+  }
+
+  // 거리 계산 방식 설정
+  if (!session.config) {
+    session.config = {};
+  }
+
+  if (!session.config.advanced_options) {
+    session.config.advanced_options = {};
+  }
+
+  session.config.advanced_options.distance_type = distanceType;
+  session.config.distance_method_set_at = new Date().toISOString();
+
+  await sessionManager.saveSession(session);
+
+  const distanceLabels = {
+    euclidean: '🏃‍♂️ 직선 거리 (빠르고 안정적)',
+    osrm: '🚗 실제 도로 거리 (정확하지만 느림)',
+    manhattan: '📱 맨하탄 거리 (격자형)'
+  };
+
+  response += `✅ **거리 계산 방식 설정 완료**\n\n`;
+  response += `📐 **선택된 방식:** ${distanceLabels[distanceType as keyof typeof distanceLabels]}\n\n`;
+  
+  if (distanceType === 'osrm') {
+    response += `⚠️ **OSRM 방식 주의사항:**\n`;
+    response += `- 최적화 시간이 2-3배 더 걸릴 수 있습니다\n`;
+    response += `- 인터넷 연결이 필요합니다\n`;
+    response += `- 대용량 데이터(50개 이상 주문)에는 권장하지 않습니다\n\n`;
+  }
+  
+  response += `🎯 **다음 단계:**\n`;
   response += `**Option 1:** 고급 옵션 설정\n`;
   response += `- \`step: "advanced"\` 전달\n\n`;
   response += `**Option 2:** 설정 확정하고 진행\n`;
@@ -427,9 +496,9 @@ async function handleConstraintConfigurationStep(session: any, constraintOverrid
   };
 }
 
-// 4단계: 고급 옵션 설정
+// 5단계: 고급 옵션 설정
 async function handleAdvancedOptionsStep(session: any, advancedOptions?: any): Promise<{ content: any[] }> {
-  let response = `⚡ **4단계: 고급 옵션 설정**\n\n`;
+  let response = `⚡ **5단계: 고급 옵션 설정**\n\n`;
 
   if (!advancedOptions) {
     response += `🔧 **사용 가능한 고급 옵션:**\n\n`;
@@ -438,11 +507,6 @@ async function handleAdvancedOptionsStep(session: any, advancedOptions?: any): P
     response += `- \`fast\`: 30초, 빠른 결과\n`;
     response += `- \`balanced\`: 60초, 균형잡힌 품질 (기본값)\n`;
     response += `- \`thorough\`: 120초, 최고 품질\n\n`;
-    
-    response += `📐 **거리 계산 방식** (distance_type):\n`;
-    response += `- \`euclidean\`: 직선 거리 (기본값, 빠름)\n`;
-    response += `- \`manhattan\`: 맨하탄 거리\n`;
-    response += `- \`osrm\`: 실제 도로 거리 (정확하지만 느림)\n\n`;
     
     response += `📦 **미할당 허용** (allow_unassigned):\n`;
     response += `- \`true\`: 배송 불가능한 주문 허용 (기본값)\n`;
@@ -470,7 +534,6 @@ async function handleAdvancedOptionsStep(session: any, advancedOptions?: any): P
     multi_depot: false, // 기본값
     priority_delivery: true, // 기본값
     optimization_intensity: advancedOptions.optimization_intensity || 'balanced',
-    distance_type: advancedOptions.distance_type || 'euclidean',
     allow_unassigned: advancedOptions.allow_unassigned !== undefined ? 
       advancedOptions.allow_unassigned : true
   };
@@ -483,7 +546,6 @@ async function handleAdvancedOptionsStep(session: any, advancedOptions?: any): P
   response += `✅ **고급 옵션 설정 완료**\n\n`;
   response += `📋 **최종 고급 옵션:**\n`;
   response += `🚀 최적화 강도: ${finalAdvancedOptions.optimization_intensity}\n`;
-  response += `📐 거리 계산: ${finalAdvancedOptions.distance_type}\n`;
   response += `📦 미할당 허용: ${finalAdvancedOptions.allow_unassigned ? '✅ 허용' : '❌ 불허'}\n\n`;
   
   response += `🎯 **다음 단계:**\n`;
@@ -497,9 +559,9 @@ async function handleAdvancedOptionsStep(session: any, advancedOptions?: any): P
   };
 }
 
-// 5단계: 설정 확정
+// 6단계: 설정 확정
 async function handleConfirmationStep(session: any): Promise<{ content: any[] }> {
-  let response = `✅ **5단계: 설정 확정**\n\n`;
+  let response = `✅ **6단계: 설정 확정**\n\n`;
 
   if (!session.config || !session.config.objective) {
     response += `❌ **설정 누락**: 최적화 목표가 설정되지 않았습니다.\n\n`;
